@@ -25,7 +25,7 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.0'
 
@@ -33,14 +33,14 @@ jobs:
         run: gradle assembleRelease --stacktrace
 
       - name: Sign APK
-        uses: r0adkll/sign-android-release@v1
+        uses: ilharp/sign-android-release@v1
         id: sign_app
         env:
           BUILD_TOOLS_VERSION: "34.0.0"
         with:
-          releaseDirectory: app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.KEYSTORE_BASE64 }}
-          alias: ${{ secrets.KEY_ALIAS }}
+          releaseDir: app/build/outputs/apk/release
+          signingKey: ${{ secrets.KEYSTORE_BASE64 }}
+          keyAlias: ${{ secrets.KEY_ALIAS }}
           keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
 
@@ -50,7 +50,7 @@ jobs:
           VERSION_NAME=$(grep -Po 'versionName\s+"\K.*?(?=")' app/build.gradle)
           TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
           NEW_NAME="fxxkad-dailyracing-${VERSION_NAME}-${TIMESTAMP}.apk"
-          mv "${{ steps.sign_app.outputs.signedReleaseFile }}" "$NEW_NAME"
+          mv "${{ steps.sign_app.outputs.signedFile }}" "$NEW_NAME"
           echo "apk_path=$NEW_NAME" >> $GITHUB_OUTPUT
           echo "apk_name=fxxkad-dailyracing-${VERSION_NAME}-${TIMESTAMP}" >> $GITHUB_OUTPUT
 
