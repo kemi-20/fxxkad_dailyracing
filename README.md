@@ -1,3 +1,4 @@
+﻿<p align="center"><img src="icon.png" alt="icon" width="128" height="128"></p>
 # 每日赛车 DNS 拦截模块
 
 这是一个面向 LSPosed/Xposed 的 Android 模块，仅对 `com.romielf.mrsc` 生效。模块通过 Hook 目标应用内的 DNS 解析流程，将广告、统计和跟踪域名解析为 `0.0.0.0`，尽量模拟 AdGuard Home/hosts 级别的域名屏蔽方式，避免直接干扰广告 SDK 初始化造成闪退。
