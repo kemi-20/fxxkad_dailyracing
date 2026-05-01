@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace 'com.fxxkad.dailyracing'
-    compileSdk 33
+    compileSdk 34
 
     defaultConfig {
         applicationId "com.fxxkad.dailyracing"
-        minSdk 21
-        targetSdk 33
+        minSdk 24
+        targetSdk 34
         versionCode 1
         versionName "0.1"
     }
