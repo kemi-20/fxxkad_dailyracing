@@ -77,6 +77,28 @@ sdk.dir=C\:\\Users\\YourName\\AppData\\Local\\Android\\Sdk
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
+## GitHub Actions 集成打包
+
+仓库包含 `Build Integrated RacingDaily APK` workflow。它会：
+
+1. 构建并签名本 Xposed 模块。
+2. 下载 LSPatch jar。
+3. 以集成模式把模块注入 `origin/racingdaily.apk`。
+4. 尽量保留原 APK 的包名、versionCode、versionName、minSdk 和 targetSdk。
+5. 使用仓库 secrets 中的证书重新签名最终 APK。
+6. 上传 `racingdaily-lspatched.apk` 作为 artifact。
+
+需要配置以下 GitHub Actions secrets：
+
+```text
+KEYSTORE_BASE64
+KEY_ALIAS
+KEYSTORE_PASSWORD
+KEY_PASSWORD
+```
+
+`origin/racingdaily.apk` 使用 Git LFS 跟踪，首次 clone 后请确保已启用 Git LFS。
+
 ## 说明
 
 `app/libs/api-82.jar` 是 Xposed API 的 compileOnly 依赖，仅用于编译，不会打包进 APK。

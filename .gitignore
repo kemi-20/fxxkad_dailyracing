@@ -10,5 +10,8 @@ local.properties
 *.ap_
 *.aab
 
+!origin/
+!origin/racingdaily.apk
+
 *.jks
 *.keystore
