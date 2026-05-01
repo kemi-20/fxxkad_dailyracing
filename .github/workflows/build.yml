@@ -44,9 +44,19 @@ jobs:
           keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
 
+      - name: Rename APK
+        id: rename_apk
+        run: |
+          VERSION_NAME=$(grep -Po 'versionName\s+"\K.*?(?=")' app/build.gradle)
+          TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+          NEW_NAME="fxxkad-dailyracing-${VERSION_NAME}-${TIMESTAMP}.apk"
+          mv "${{ steps.sign_app.outputs.signedReleaseFile }}" "$NEW_NAME"
+          echo "apk_path=$NEW_NAME" >> $GITHUB_OUTPUT
+          echo "apk_name=fxxkad-dailyracing-${VERSION_NAME}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: ${{steps.sign_app.outputs.signedReleaseFile}}
+          name: ${{ steps.rename_apk.outputs.apk_name }}
+          path: ${{ steps.rename_apk.outputs.apk_path }}
 
