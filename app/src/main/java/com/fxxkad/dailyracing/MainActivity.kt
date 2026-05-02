@@ -13,6 +13,7 @@ import android.text.format.DateFormat
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.LinearLayout
@@ -34,7 +35,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = getString(R.string.app_name)
+        requestWindowFeature(Window.FEATURE_NO_TITLE)
 
         adapter = RecordAdapter()
         setContentView(buildContentView())
