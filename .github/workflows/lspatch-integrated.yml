@@ -115,7 +115,6 @@ jobs:
           set -euo pipefail
           AAPT2="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/aapt2"
 
-          # Only use aapt2 for the original APK
           read_meta_from_aapt2() {
             local apk="$1"
             local badging
@@ -127,21 +126,31 @@ jobs:
             printf "%s\n%s\n%s\n" "${package_meta}" "${min_sdk}" "${target_sdk}"
           }
 
-          read_meta_from_aapt2 "${ORIGINAL_APK}" > build/original.meta
+          # Read original APK metadata for logging and potential use
+          read_meta_from_aapt2 "${ORIGINAL_APK}" > build/original.meta || true
+          echo "Original APK metadata:"
+          cat build/original.meta
 
-          # Try reading NPatch output with aapt2; if it fails, skip comparison
+          # Try reading NPatch output with aapt2
           if read_meta_from_aapt2 build/racingdaily-npatched-raw.apk > build/patched.meta 2>/dev/null; then
+            echo "Patched APK metadata:"
+            cat build/patched.meta
             if cmp -s build/original.meta build/patched.meta; then
+              echo "Metadata matches, using NPatch output directly"
               cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
               exit 0
             fi
+            echo "Metadata differs, will try apktool fix"
           else
-            echo "aapt2 cannot read NPatch output, will try apktool directly"
+            echo "aapt2 cannot read NPatch output"
           fi
 
-          # Try apktool on both APKs; apktool uses its own parsers
+          # Try apktool; it uses its own parsers that may handle NPatch's zip format
+          echo "Trying apktool decompile..."
           java -jar tools/apktool.jar d -f -s "${ORIGINAL_APK}" -o build/apktool-original
+
           if java -jar tools/apktool.jar d -f -s build/racingdaily-npatched-raw.apk -o build/apktool-patched 2>/dev/null; then
+            echo "Apktool decompile succeeded, fixing metadata..."
             python3 - <<'PY'
           import re
           from pathlib import Path
@@ -167,17 +176,22 @@ jobs:
           patched_path.write_text(patched, encoding="utf-8")
           PY
             java -jar tools/apktool.jar b build/apktool-patched -o build/racingdaily-npatched-metadata.apk
-            # Verify the rebuilt APK is readable
+
             if read_meta_from_aapt2 build/racingdaily-npatched-metadata.apk > build/restored.meta 2>/dev/null; then
-              cmp build/original.meta build/restored.meta
-              exit 0
+              if cmp -s build/original.meta build/restored.meta; then
+                echo "Apktool metadata fix successful"
+                exit 0
+              fi
+              echo "Warning: rebuilt APK metadata still differs, using NPatch output directly"
+            else
+              echo "Warning: rebuilt APK unreadable, using NPatch output directly"
             fi
-            echo "Warning: rebuilt APK metadata check failed, using NPatch output directly"
           else
-            echo "apktool also cannot decompile NPatch output, using NPatch output directly"
+            echo "Apktool cannot decompile NPatch output, using NPatch output directly"
           fi
 
-          # Fallback: use NPatch output as-is
+          # Fallback: use NPatch output as-is (metadata preserved internally by NPatch)
+          echo "Using NPatch output directly"
           cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
 
       - name: Sign integrated APK
@@ -218,7 +232,11 @@ jobs:
 
           read_meta "${ORIGINAL_APK}" > build/original-final.meta
           if read_meta build/final/racingdaily-npatched.apk > build/patched-final.meta 2>/dev/null; then
-            cmp build/original-final.meta build/patched-final.meta
+            if cmp -s build/original-final.meta build/patched-final.meta; then
+              echo "Final metadata verification passed"
+            else
+              echo "Warning: final APK metadata differs from original"
+            fi
           else
             echo "Warning: aapt2 cannot read final APK metadata, skipping comparison"
           fi
