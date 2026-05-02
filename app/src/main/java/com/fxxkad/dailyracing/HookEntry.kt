@@ -308,6 +308,7 @@ class HookEntry : IXposedHookLoadPackage {
 
     // ---------- Helpers ----------
 
+    @Suppress("DEPRECATION")
     private fun findUrlInBundle(bundle: Bundle?, classLoader: ClassLoader): String? {
         if (bundle == null) return null
         try {

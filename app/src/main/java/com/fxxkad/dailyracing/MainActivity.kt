@@ -332,7 +332,7 @@ fun ActionsCard(
                 Switch(checked = fixShareEnabled, onCheckedChange = onToggleFixShare)
             }
 
-            Divider(modifier = Modifier.padding(vertical = 16.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
             val time = remember { mutableStateOf(System.currentTimeMillis()) }
             Text(
@@ -437,7 +437,7 @@ fun VersionMenu(latestVersion: String?, onFetchVersion: () -> Unit) {
                 onClick = { },
                 enabled = false
             )
-            Divider()
+            HorizontalDivider()
             DropdownMenuItem(
                 text = { Text("GitHub 发布页") },
                 onClick = {

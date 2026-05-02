@@ -31,7 +31,7 @@ object BlockRules {
                     if (name.startsWith("assets/rules/") && name.endsWith(".txt")) {
                         val fileName = name.removePrefix("assets/rules/")
                         zip.getInputStream(entry).use { stream ->
-                            parseRules(stream.reader().buffered(), fileName) { newHosts.add(it) }
+                            parseRules(stream.reader().buffered()) { newHosts.add(it) }
                         }
                     }
                 }
@@ -60,7 +60,7 @@ object BlockRules {
         XposedBridge.log("[DailyRacingBlocker] loaded ${hosts.size} domain rules")
     }
 
-    private fun parseRules(reader: BufferedReader, source: String, onDomain: (String) -> Unit) {
+    private fun parseRules(reader: BufferedReader, onDomain: (String) -> Unit) {
         reader.forEachLine { line ->
             val trimmed = line.trim()
             if (trimmed.isEmpty() || trimmed.startsWith("!") || trimmed.startsWith("#")) return@forEachLine
