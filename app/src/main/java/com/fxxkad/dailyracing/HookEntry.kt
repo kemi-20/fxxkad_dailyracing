@@ -288,12 +288,14 @@ class HookEntry : IXposedHookLoadPackage {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, url)
-            // Only set package — let Android resolve WeChat's exported text-share
-            // activity directly, skipping the system chooser.
-            `package` = "com.tencent.mm"
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            // Explicit component so the chooser has only one entry; the system
+            // may skip the dialog on single-match. Route through chooser to keep
+            // the system as the caller (bypasses WeChat caller-signature check).
+            component = ComponentName("com.tencent.mm", "com.tencent.mm.ui.tools.ShareImgUI")
         }
-        ctx.startActivity(intent)
+        val chooser = Intent.createChooser(intent, null)
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        ctx.startActivity(chooser)
     }
 
     // ---------- Helpers ----------
