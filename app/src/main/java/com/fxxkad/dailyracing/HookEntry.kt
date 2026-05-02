@@ -125,13 +125,20 @@ class HookEntry : IXposedHookLoadPackage {
                                 key.contains("_wxapi_") || key.contains("_wxobject_")
                             } ?: false
 
-                    // Log any intent that has extras but matches neither QQ nor WeChat,
-                    // so we can diagnose missing detection patterns from Xposed logs.
+                    // Log every intent that looks share-like to diagnose WeChat interception
                     if (!isQQShare && !isWeChatShare) {
-                        if (intent.extras != null && intent.extras!!.keySet().isNotEmpty()) {
-                            XposedBridge.log("[DailyRacingBlocker] SKIP intent w/ extras — " +
+                        val hasInteresting = targetPackage.isNotEmpty() || componentName.isNotEmpty() ||
+                            action != null || intent.type != null || dataString.isNotEmpty() ||
+                            (intent.extras != null && intent.extras!!.keySet().isNotEmpty())
+                        if (hasInteresting) {
+                            val trace = Thread.currentThread().stackTrace
+                                .dropWhile { it.className.contains("de.robv.android.xposed") ||
+                                             it.className.contains("android.app") }
+                                .take(6).joinToString(" <- ") { "${it.className.substringAfterLast('.')}.${it.methodName}" }
+                            XposedBridge.log("[DailyRacingBlocker] TRACE — " +
                                 "pkg=${targetPackage} comp=${componentName} act=${action} " +
-                                "data=${dataString.take(80)} keys=${intent.extras!!.keySet()}")
+                                "type=${intent.type} data=${dataString.take(120)} " +
+                                "keys=${intent.extras?.keySet()?.take(10)} | $trace")
                         }
                         return
                     }
@@ -250,6 +257,24 @@ class HookEntry : IXposedHookLoadPackage {
             }
         } catch (t: Throwable) {
             XposedBridge.log("[DailyRacingBlocker] failed to hook ContextImpl: ${t.message}")
+        }
+
+        try {
+            XposedBridge.hookAllMethods(
+                XposedHelpers.findClass("android.content.ContextWrapper", classLoader),
+                "startActivity", shareHook)
+            XposedBridge.log("[DailyRacingBlocker] hooked ContextWrapper.startActivity for share")
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] failed to hook ContextWrapper: ${t.message}")
+        }
+
+        try {
+            XposedBridge.hookAllMethods(
+                android.app.Activity::class.java,
+                "startActivity", shareHook)
+            XposedBridge.log("[DailyRacingBlocker] hooked Activity.startActivity for share")
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] failed to hook Activity.startActivity: ${t.message}")
         }
     }
 
