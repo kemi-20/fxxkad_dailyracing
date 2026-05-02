@@ -126,15 +126,8 @@ class HookEntry : IXposedHookLoadPackage {
                     intent.extras?.classLoader = classLoader
 
                     // Check if the fix is enabled
-                    val context = resolveContext()
-                    if (context != null) {
-                        try {
-                            val uri = android.net.Uri.parse("content://com.fxxkad.dailyracing.records/records")
-                            val bundle = context.contentResolver.call(uri, "get_setting", "fix_share", null)
-                            val isEnabled = bundle?.getBoolean("value", true) ?: true
-                            if (!isEnabled) return
-                        } catch (_: Exception) {}
-                    }
+                    val shareCtx = resolveContext()
+                    if (shareCtx != null && !isFixShareEnabled(shareCtx)) return
 
                     var urlToShare: String? = null
 
@@ -261,15 +254,8 @@ class HookEntry : IXposedHookLoadPackage {
             val url = extractUrlFromWxReq(req) ?: return
 
             // Respect the "fix share" toggle
-            val context = resolveContext()
-            if (context != null) {
-                try {
-                    val uri = android.net.Uri.parse("content://com.fxxkad.dailyracing.records/records")
-                    val bundle = context.contentResolver.call(uri, "get_setting", "fix_share", null)
-                    val isEnabled = bundle?.getBoolean("value", true) ?: true
-                    if (!isEnabled) return
-                } catch (_: Exception) {}
-            }
+            val ctx = resolveContext()
+            if (ctx != null && !isFixShareEnabled(ctx)) return
 
             XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, URL=$url")
             param.result = true
@@ -308,6 +294,15 @@ class HookEntry : IXposedHookLoadPackage {
         val chooser = Intent.createChooser(intent, null)
         chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         ctx.startActivity(chooser)
+    }
+
+    private fun isFixShareEnabled(context: Context): Boolean {
+        return try {
+            val mc = context.createPackageContext("com.fxxkad.dailyracing",
+                Context.CONTEXT_IGNORE_SECURITY)
+            mc.getSharedPreferences("block_stats", Context.MODE_PRIVATE)
+                .getBoolean("fix_share", true)
+        } catch (_: Exception) { true }
     }
 
     // ---------- Helpers ----------
