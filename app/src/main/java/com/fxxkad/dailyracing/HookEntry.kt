@@ -193,16 +193,22 @@ class HookEntry : IXposedHookLoadPackage {
                                     type = "text/plain"
                                     putExtra(Intent.EXTRA_TEXT, urlToShare)
 
-                                    if (isWeChatShare) {
-                                        // Clear specific components, let Android resolve to WeChat's default receiver
-                                        `package` = "com.tencent.mm"
-                                    } else {
-                                        // Bypass the intermediate QQ chooser dialog and jump directly to friends list
+                                    if (!isWeChatShare) {
+                                        // For QQ: bypass the intermediate QQ chooser dialog and jump directly to friends list
                                         component = ComponentName("com.tencent.mobileqq", "com.tencent.mobileqq.activity.JumpActivity")
                                     }
                                 }
 
-                                param.args[4] = plainTextIntent
+                                if (isWeChatShare) {
+                                    // For WeChat: wrap in system chooser.
+                                    // WeChat SDK strictly checks signatures if the intent targets WeChat directly.
+                                    // By routing through the system chooser, we bypass the SDK signature validation.
+                                    val chooserIntent = Intent.createChooser(plainTextIntent, "分享链接")
+                                    chooserIntent.flags = intent.flags
+                                    param.args[4] = chooserIntent
+                                } else {
+                                    param.args[4] = plainTextIntent
+                                }
                             }
                         } catch (t: Throwable) {
                             XposedBridge.log("[DailyRacingBlocker] Error in share hook: ${t.message}")
