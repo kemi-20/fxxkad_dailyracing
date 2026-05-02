@@ -1,6 +1,7 @@
 package com.fxxkad.dailyracing
 
 import android.app.Application
+import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -176,8 +177,8 @@ class HookEntry : IXposedHookLoadPackage {
                                 val plainTextIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
                                     putExtra(Intent.EXTRA_TEXT, urlToShare)
-                                    // Set package to QQ to ensure it directly opens QQ instead of chooser
-                                    `package` = "com.tencent.mobileqq"
+                                    // Bypass the intermediate QQ chooser dialog and jump directly to friends list
+                                    component = ComponentName("com.tencent.mobileqq", "com.tencent.mobileqq.activity.JumpActivity")
                                 }
 
                                 param.args[4] = plainTextIntent
