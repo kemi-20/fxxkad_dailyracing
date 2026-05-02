@@ -259,6 +259,18 @@ class HookEntry : IXposedHookLoadPackage {
             val req = param.args.getOrNull(0) ?: return
             if (!req.javaClass.name.contains("SendMessageToWX")) return
             val url = extractUrlFromWxReq(req) ?: return
+
+            // Respect the "fix share" toggle
+            val context = resolveContext()
+            if (context != null) {
+                try {
+                    val uri = android.net.Uri.parse("content://com.fxxkad.dailyracing.records/records")
+                    val bundle = context.contentResolver.call(uri, "get_setting", "fix_share", null)
+                    val isEnabled = bundle?.getBoolean("value", true) ?: true
+                    if (!isEnabled) return
+                } catch (_: Exception) {}
+            }
+
             XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, URL=$url")
             param.result = true
             startWxPlainTextShare(url)
