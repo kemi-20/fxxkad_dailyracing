@@ -227,9 +227,12 @@ jobs:
                   if info.compress_type == zipfile.ZIP_STORED:
                       stored_entries.add(info.filename)
 
-          # Extract with system unzip (handles nested APK entries without zipbomb checks)
+          # Extract with unzip; NPatch produces overlapped entries that trigger
+          # zipbomb detection in both Python 3.12 and recent unzip (exit 12)
           os.makedirs(tmp_dir, exist_ok=True)
-          subprocess.run(["unzip", "-o", "-q", apk, "-d", tmp_dir], check=True)
+          subprocess.run(["unzip", "-o", "-q", apk, "-d", tmp_dir],
+                         env={**os.environ, "UNZIP_DISABLE_ZIPBOMB_DETECTION": "TRUE"},
+                         check=True)
 
           # Repack with max deflate where applicable
           tmp_apk = apk + ".tmp"
