@@ -209,6 +209,13 @@ jobs:
           echo "Using NPatch output directly"
           cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
 
+      - name: Compress APK with Zopfli
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq advancecomp
+          echo "Before: $(du -h build/racingdaily-npatched-metadata.apk | cut -f1)"
+          advzip -z4 build/racingdaily-npatched-metadata.apk
+          echo "After: $(du -h build/racingdaily-npatched-metadata.apk | cut -f1)"
+
       - name: Sign integrated APK
         env:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
