@@ -253,3 +253,20 @@ jobs:
         with:
           name: racingdaily-npatched-integrated
           path: build/final/racingdaily-npatched.apk
+
+      - name: Prepare Xposed module artifact
+        env:
+          BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOLS_VERSION }}
+        run: |
+          AAPT2="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/aapt2"
+          VERSION_NAME="$("${AAPT2}" dump badging build/module/xposed-module-signed.apk \
+            | sed -n "s/^.*versionName='\([^']*\)'.*/\1/p")"
+          BUILD_TIME="$(date +%Y%m%d-%H%M%S)"
+          MODULE_FILE="fxxkad-dailyracing-${VERSION_NAME}-${BUILD_TIME}.apk"
+          cp build/module/xposed-module-signed.apk "build/${MODULE_FILE}"
+
+      - name: Upload Xposed module
+        uses: actions/upload-artifact@v7
+        with:
+          name: fxxkad-dailyracing-xposed-module
+          path: build/fxxkad-dailyracing-*.apk
