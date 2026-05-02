@@ -1,10 +1,12 @@
 package com.fxxkad.dailyracing
 
 import android.app.Activity
+import android.content.Intent
 import android.database.Cursor
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.text.TextUtils
 import android.text.format.DateFormat
@@ -15,8 +17,12 @@ import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 class MainActivity : Activity() {
     private lateinit var totalView: TextView
@@ -84,18 +90,36 @@ class MainActivity : Activity() {
         return root
     }
 
+    private var latestVersion: String? = null
+
     private fun buildHeader(): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = round(COLOR_GREEN_DARK, 16f)
             setPadding(dp(16), dp(14), dp(16), dp(14))
 
-            addView(TextView(this@MainActivity).apply {
-                text = "每日赛车 DNS 拦截"
-                textSize = 22f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.WHITE)
+            // Title row: title + ⋮ menu button
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                addView(TextView(this@MainActivity).apply {
+                    text = "每日赛车 DNS 拦截"
+                    textSize = 22f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+                addView(TextView(this@MainActivity).apply {
+                    text = "⋮"
+                    textSize = 24f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                    setPadding(dp(12), dp(4), 0, dp(4))
+                    setOnClickListener { showVersionMenu(it) }
+                })
             })
+
             addView(TextView(this@MainActivity).apply {
                 text = "目标：${BlockRules.targetPackage}  ·  命中域名返回 ${BlockRules.zeroAddress}"
                 textSize = 13f
@@ -105,6 +129,43 @@ class MainActivity : Activity() {
                 maxLines = 2
             })
         }
+    }
+
+    private fun showVersionMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor, Gravity.END)
+        val currentVersion = BuildConfig.VERSION_NAME
+        popup.menu.add("当前版本：$currentVersion").apply { isEnabled = false }
+        popup.menu.add("最新版本：${latestVersion ?: "检查中..."}").apply { isEnabled = false }
+        popup.menu.add("GitHub 发布页").apply {
+            setOnMenuItemClickListener {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(
+                    "https://github.com/kemi-20/fxxkad_dailyracing/releases")))
+                true
+            }
+        }
+        popup.show()
+
+        if (latestVersion == null) {
+            fetchLatestVersion()
+        }
+    }
+
+    private fun fetchLatestVersion() {
+        Thread {
+            try {
+                val url = URL("https://api.github.com/repos/kemi-20/fxxkad_dailyracing/releases/latest")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.setRequestProperty("Accept", "application/vnd.github+json")
+                conn.connectTimeout = 8_000
+                conn.readTimeout = 8_000
+                val json = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                val tag = JSONObject(json).getString("tag_name")
+                latestVersion = tag
+            } catch (_: Exception) {
+                latestVersion = "获取失败"
+            }
+        }.start()
     }
 
     private fun buildStats(): View {
