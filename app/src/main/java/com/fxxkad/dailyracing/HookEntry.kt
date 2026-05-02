@@ -172,22 +172,22 @@ class HookEntry : IXposedHookLoadPackage {
                             type = "text/plain"
                             putExtra(Intent.EXTRA_TEXT, urlToShare)
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK
-
-                            if (isWeChatShare) {
-                                // Detect scene: 0=Friends, 1=Timeline
-                                val scene = intent.extras?.getInt("_wxapi_sendmessagetowx_req_scene") ?: 0
-                                val targetActivity = if (scene == 1)
-                                    "com.tencent.mm.ui.tools.ShareToTimeLineUI"
-                                else
-                                    "com.tencent.mm.ui.tools.ShareImgUI"
-                                component = ComponentName("com.tencent.mm", targetActivity)
-                            } else {
-                                // For QQ: bypass the intermediate QQ chooser dialog and jump directly to friends list
-                                component = ComponentName("com.tencent.mobileqq", "com.tencent.mobileqq.activity.JumpActivity")
-                            }
                         }
 
-                        param.args[intentIndex] = plainTextIntent
+                        param.args[intentIndex] = if (isWeChatShare) {
+                            // Route through system chooser to bypass WeChat SDK caller-signature checks.
+                            // WeChat verifies the calling package's signature even for plain text intents
+                            // when targeted directly, so the system must be the caller.
+                            plainTextIntent.`package` = "com.tencent.mm"
+                            Intent.createChooser(plainTextIntent, null)
+                        } else {
+                            // QQ: bypass the intermediate QQ chooser dialog and jump directly to friends list
+                            plainTextIntent.component = ComponentName(
+                                "com.tencent.mobileqq",
+                                "com.tencent.mobileqq.activity.JumpActivity"
+                            )
+                            plainTextIntent
+                        }
                     } else {
                         val appName = if (isWeChatShare) "WeChat" else "QQ"
                         XposedBridge.log("[DailyRacingBlocker] WARNING: $appName share detected but URL extraction failed!")
