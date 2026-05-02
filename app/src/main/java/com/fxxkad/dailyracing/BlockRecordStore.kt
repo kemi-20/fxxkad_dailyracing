@@ -16,10 +16,37 @@ object BlockRecordStore {
     const val COL_RESULT = "result"
 
     private const val MAX_RECORDS = 1000
+    private const val PREFS_NAME = "block_stats"
+    const val PREF_TOTAL_COUNT = "total_count"
+    const val PREF_FIX_QQ = "fix_qq"
+
+    fun getTotalCount(context: Context): Long {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(PREF_TOTAL_COUNT, 0L)
+    }
+
+    private fun incrementTotalCount(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val current = prefs.getLong(PREF_TOTAL_COUNT, 0L)
+        prefs.edit().putLong(PREF_TOTAL_COUNT, current + 1).apply()
+    }
+
+    fun isFixQqEnabled(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(PREF_FIX_QQ, true)
+    }
+
+    fun setFixQqEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(PREF_FIX_QQ, enabled).apply()
+    }
 
     fun insert(context: Context, values: ContentValues): Long {
         val db = DatabaseHelper(context.applicationContext).writableDatabase
         val id = db.insert(TABLE_RECORDS, null, values)
+        if (id != -1L) {
+            incrementTotalCount(context)
+        }
         trimRecords(db)
         return id
     }

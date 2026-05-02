@@ -50,6 +50,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _records = MutableStateFlow<List<BlockRecord>>(emptyList())
     val records = _records.asStateFlow()
 
+    private val _totalCount = MutableStateFlow<Long>(0L)
+    val totalCount = _totalCount.asStateFlow()
+
+    private val _fixQqEnabled = MutableStateFlow<Boolean>(true)
+    val fixQqEnabled = _fixQqEnabled.asStateFlow()
+
     private val _latestVersion = MutableStateFlow<String?>(null)
     val latestVersion = _latestVersion.asStateFlow()
 
@@ -57,15 +63,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshRecords()
+        fetchSettings()
+    }
+
+    private fun fetchSettings() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val contentResolver = getApplication<Application>().contentResolver
+            val uri = BlockRecordProvider.CONTENT_URI
+            val bundle = contentResolver.call(uri, "get_setting", "fix_qq", null)
+            _fixQqEnabled.value = bundle?.getBoolean("value", true) ?: true
+        }
+    }
+
+    fun toggleFixQq(enabled: Boolean) {
+        _fixQqEnabled.value = enabled
+        viewModelScope.launch(Dispatchers.IO) {
+            val contentResolver = getApplication<Application>().contentResolver
+            val uri = BlockRecordProvider.CONTENT_URI
+            val extras = Bundle().apply { putBoolean("value", enabled) }
+            contentResolver.call(uri, "set_setting", "fix_qq", extras)
+        }
     }
 
     fun refreshRecords() {
         viewModelScope.launch(Dispatchers.IO) {
+            val contentResolver = getApplication<Application>().contentResolver
             val uri = BlockRecordProvider.CONTENT_URI.buildUpon()
                 .appendQueryParameter("limit", "500")
                 .build()
-            val cursor = getApplication<Application>().contentResolver.query(uri, null, null, null, null)
+
+            // Query total count via call()
+            val statsBundle = contentResolver.call(BlockRecordProvider.CONTENT_URI, "get_stats", null, null)
+            val count = statsBundle?.getLong("total_count", 0L) ?: 0L
+
+            val cursor = contentResolver.query(uri, null, null, null, null)
             val newRecords = cursor.useRecords().deduplicateForDisplay()
+
+            _totalCount.value = maxOf(count, newRecords.size.toLong())
             _records.value = newRecords
         }
     }
@@ -191,7 +225,7 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
 
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard("总拦截", records.size.toString(), Modifier.weight(1f))
+                    StatCard("总拦截", viewModel.totalCount.collectAsStateWithLifecycle().value.toString(), Modifier.weight(1f))
                     StatCard("域名数", records.distinctBy { it.host }.size.toString(), Modifier.weight(1f))
                     StatCard("规则", BlockRules.hosts.size.toString(), Modifier.weight(1f))
                 }
@@ -200,7 +234,9 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
             item {
                 ActionsCard(
                     onRefresh = viewModel::refreshRecords,
-                    onClear = viewModel::clearRecords
+                    onClear = viewModel::clearRecords,
+                    fixQqEnabled = viewModel.fixQqEnabled.collectAsStateWithLifecycle().value,
+                    onToggleFixQq = viewModel::toggleFixQq
                 )
             }
 
@@ -264,7 +300,12 @@ fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun ActionsCard(onRefresh: () -> Unit, onClear: () -> Unit) {
+fun ActionsCard(
+    onRefresh: () -> Unit,
+    onClear: () -> Unit,
+    fixQqEnabled: Boolean,
+    onToggleFixQq: (Boolean) -> Unit
+) {
     val context = LocalContext.current
     ElevatedCard(
         shape = RoundedCornerShape(24.dp),
@@ -274,6 +315,25 @@ fun ActionsCard(onRefresh: () -> Unit, onClear: () -> Unit) {
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("修复 QQ 分享", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "拦截由于非官方重打包导致的富文本卡片分享失败，将其强制转换为纯文本链接分享。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Switch(checked = fixQqEnabled, onCheckedChange = onToggleFixQq)
+            }
+
+            Divider(modifier = Modifier.padding(vertical = 16.dp))
+
             val time = remember { mutableStateOf(System.currentTimeMillis()) }
             Text(
                 text = "运行状态：等待目标应用触发 DNS 查询。列表已合并 1 分钟内重复域名。最近刷新：${DateFormat.format("HH:mm:ss", time.value)}",

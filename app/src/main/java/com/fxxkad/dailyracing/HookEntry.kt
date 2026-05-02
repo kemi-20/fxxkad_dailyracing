@@ -122,6 +122,19 @@ class HookEntry : IXposedHookLoadPackage {
 
                             if (!isQQShare) return
 
+                            // Check if the fix is enabled via the host app's ContentProvider
+                            val context = resolveContext()
+                            if (context != null) {
+                                try {
+                                    val uri = android.net.Uri.parse("content://com.fxxkad.dailyracing.records/records")
+                                    val bundle = context.contentResolver.call(uri, "get_setting", "fix_qq", null)
+                                    val isEnabled = bundle?.getBoolean("value", true) ?: true
+                                    if (!isEnabled) {
+                                        return // User disabled the QQ share fix
+                                    }
+                                } catch (_: Exception) {}
+                            }
+
                             var urlToShare: String? = null
 
                             // Extract URL from standard ACTION_SEND

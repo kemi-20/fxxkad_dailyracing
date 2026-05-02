@@ -6,6 +6,7 @@ import android.content.ContentValues
 import android.content.UriMatcher
 import android.database.Cursor
 import android.net.Uri
+import android.os.Bundle
 
 class BlockRecordProvider : ContentProvider() {
     override fun onCreate(): Boolean {
@@ -50,6 +51,28 @@ class BlockRecordProvider : ContentProvider() {
     override fun getType(uri: Uri): String? = when (matcher.match(uri)) {
         RECORDS -> "vnd.android.cursor.dir/vnd.$AUTHORITY.records"
         else -> null
+    }
+
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
+        val ctx = context ?: return null
+        return when (method) {
+            "get_stats" -> Bundle().apply {
+                putLong("total_count", BlockRecordStore.getTotalCount(ctx))
+            }
+            "get_setting" -> Bundle().apply {
+                if (arg == "fix_qq") {
+                    putBoolean("value", BlockRecordStore.isFixQqEnabled(ctx))
+                }
+            }
+            "set_setting" -> Bundle().apply {
+                if (arg == "fix_qq" && extras != null) {
+                    val enabled = extras.getBoolean("value", true)
+                    BlockRecordStore.setFixQqEnabled(ctx, enabled)
+                    putBoolean("success", true)
+                }
+            }
+            else -> super.call(method, arg, extras)
+        }
     }
 
     companion object {
