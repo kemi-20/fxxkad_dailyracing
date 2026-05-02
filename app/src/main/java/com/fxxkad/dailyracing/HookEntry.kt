@@ -289,9 +289,10 @@ class HookEntry : IXposedHookLoadPackage {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, url)
             `package` = "com.tencent.mm"
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
-        ctx.startActivity(Intent.createChooser(intent, null))
+        val chooser = Intent.createChooser(intent, null)
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        ctx.startActivity(chooser)
     }
 
     // ---------- Helpers ----------
