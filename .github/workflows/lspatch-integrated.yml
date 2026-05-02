@@ -209,51 +209,6 @@ jobs:
           echo "Using NPatch output directly"
           cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
 
-      - name: Compress APK (max deflate)
-        run: |
-          sudo apt-get install -y -qq p7zip-full
-
-          python3 - <<'PY'
-          import zipfile, os, subprocess, shutil
-
-          apk = "build/racingdaily-npatched-metadata.apk"
-          tmp_dir = "build/apktemp"
-
-          orig_size = os.path.getsize(apk)
-          print(f"Before: {orig_size / 1024 / 1024:.1f} MB")
-
-          # Get STORED entries list (infolist() does not read data)
-          stored_entries = set()
-          with zipfile.ZipFile(apk, 'r') as z:
-              for info in z.infolist():
-                  if info.compress_type == zipfile.ZIP_STORED:
-                      stored_entries.add(info.filename)
-
-          # 7z handles NPatch's overlapped entries without zipbomb errors
-          os.makedirs(tmp_dir, exist_ok=True)
-          subprocess.run(["7z", "x", apk, f"-o{tmp_dir}", "-y"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-
-          # Repack with max deflate, preserving STORED entries
-          tmp_apk = apk + ".tmp"
-          with zipfile.ZipFile(tmp_apk, 'w', zipfile.ZIP_DEFLATED) as zout:
-              for root, dirs, files in os.walk(tmp_dir):
-                  for f in files:
-                      path = os.path.join(root, f)
-                      arcname = os.path.relpath(path, tmp_dir).replace('\\', '/')
-                      with open(path, 'rb') as fp:
-                          data = fp.read()
-                      if arcname in stored_entries:
-                          zout.writestr(arcname, data, compress_type=zipfile.ZIP_STORED)
-                      else:
-                          zout.writestr(arcname, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
-
-          new_size = os.path.getsize(tmp_apk)
-          os.replace(tmp_apk, apk)
-          shutil.rmtree(tmp_dir)
-          print(f"After:  {new_size / 1024 / 1024:.1f} MB ({orig_size - new_size:,} bytes saved)")
-          PY
-
       - name: Sign integrated APK
         env:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
