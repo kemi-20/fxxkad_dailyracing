@@ -29,6 +29,7 @@ class HookEntry : IXposedHookLoadPackage {
         hookInetAddress(lpparam.packageName)
         hookAndroidNameService(lpparam.packageName)
         hookShareIntent(lpparam.classLoader)
+        hookWeChatSendReq(lpparam.classLoader)
     }
 
     private fun hookApplicationAttach() {
@@ -250,6 +251,56 @@ class HookEntry : IXposedHookLoadPackage {
         }
     }
 
+    private fun hookWeChatSendReq(classLoader: ClassLoader) {
+        try {
+            val iwxApi = XposedHelpers.findClassIfExists(
+                "com.tencent.mm.opensdk.openapi.IWXAPI", classLoader) ?: return
+            XposedBridge.hookAllMethods(iwxApi, "sendReq", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        val req = param.args.getOrNull(0) ?: return
+                        if (!req.javaClass.name.contains("SendMessageToWX")) return
+                        val message = XposedHelpers.getObjectField(req, "message") ?: return
+
+                        val mediaObject = try {
+                            XposedHelpers.getObjectField(message, "mediaObject")
+                        } catch (_: Exception) { null }
+
+                        val url = if (mediaObject != null &&
+                            mediaObject.javaClass.name.contains("WXWebpageObject")) {
+                            try {
+                                XposedHelpers.getObjectField(mediaObject, "webpageUrl") as? String
+                            } catch (_: Exception) { null }
+                        } else null
+
+                        if (url.isNullOrEmpty()) return
+
+                        XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, URL=$url")
+
+                        // Block the original sendReq (which would use ContentProvider →
+                        // WeChat SDK checks signature and WeChat rejects the self-signed caller)
+                        param.result = true
+
+                        // Fire a plain-text share through the system chooser instead
+                        val ctx = resolveContext() ?: return
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, url)
+                            `package` = "com.tencent.mm"
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        ctx.startActivity(Intent.createChooser(intent, null))
+                    } catch (t: Throwable) {
+                        XposedBridge.log("[DailyRacingBlocker] WX sendReq hook error: ${t.message}")
+                    }
+                }
+            })
+            XposedBridge.log("[DailyRacingBlocker] hooked IWXAPI.sendReq")
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] failed to hook WX sendReq: ${t.message}")
+        }
+    }
+
     private fun findUrlInBundle(bundle: Bundle?, classLoader: ClassLoader): String? {
         if (bundle == null) return null
         try {
@@ -275,7 +326,6 @@ class HookEntry : IXposedHookLoadPackage {
 
     private fun recordBlock(packageName: String, host: String?, source: String) {
         val normalizedHost = host ?: return
-        XposedBridge.log("[DailyRacingBlocker] blocked $normalizedHost -> ${BlockRules.zeroAddress}")
 
         val event = BlockEvent(
             time = System.currentTimeMillis(),
