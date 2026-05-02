@@ -113,9 +113,25 @@ class HookEntry : IXposedHookLoadPackage {
                     val isWeChatShare = targetPackage == "com.tencent.mm" ||
                             componentName.startsWith("com.tencent.mm.") ||
                             action == "com.tencent.mm.action.SEND" ||
-                            intent.hasExtra("_wxapi_command_type")
+                            intent.hasExtra("_wxapi_command_type") ||
+                            // Catch Tencent Open SDK dispatching to WeChat (its bundled WeChat SDK
+                            // may use different stub activity names or leave the intent implicit)
+                            dataString.contains("wechat") ||
+                            dataString.contains("weixin") ||
+                            intent.extras?.keySet()?.any { key ->
+                                key.contains("_wxapi_") || key.contains("_wxobject_")
+                            } ?: false
 
-                    if (!isQQShare && !isWeChatShare) return
+                    // Log any intent that has extras but matches neither QQ nor WeChat,
+                    // so we can diagnose missing detection patterns from Xposed logs.
+                    if (!isQQShare && !isWeChatShare) {
+                        if (intent.extras != null && intent.extras!!.keySet().isNotEmpty()) {
+                            XposedBridge.log("[DailyRacingBlocker] SKIP intent w/ extras — " +
+                                "pkg=${targetPackage} comp=${componentName} act=${action} " +
+                                "data=${dataString.take(80)} keys=${intent.extras!!.keySet()}")
+                        }
+                        return
+                    }
 
                     intent.extras?.classLoader = classLoader
 
