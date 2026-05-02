@@ -117,6 +117,8 @@ class HookEntry : IXposedHookLoadPackage {
 
                     if (!isQQShare && !isWeChatShare) return
 
+                    intent.extras?.classLoader = classLoader
+
                     // Check if the fix is enabled via the host app's ContentProvider
                     val context = resolveContext()
                     if (context != null) {
@@ -150,18 +152,7 @@ class HookEntry : IXposedHookLoadPackage {
                     }
                     // Extract URL from Tencent Open SDK AssistActivity or WeChat intent
                     else if (intent.extras != null) {
-                        val bundle = intent.extras
-                        urlToShare = bundle?.getString("targetUrl") ?:
-                                bundle?.getString("url") ?:
-                                bundle?.getString("share_url") ?:
-                                bundle?.getString("link") ?:
-                                bundle?.getString("_wxapi_sendauth_req_extData") ?:
-                                bundle?.getBundle("key_params")?.getString("targetUrl")
-
-                        if (urlToShare.isNullOrEmpty() && bundle != null) {
-                            // Deep inspection for WeChat WXWebpageObject or other nested bundles
-                            urlToShare = findUrlInBundle(bundle)
-                        }
+                        urlToShare = findUrlInBundle(intent.extras, classLoader)
                     }
 
                     if (urlToShare.isNullOrEmpty()) {
@@ -180,22 +171,28 @@ class HookEntry : IXposedHookLoadPackage {
                         val plainTextIntent = Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
                             putExtra(Intent.EXTRA_TEXT, urlToShare)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
 
-                            if (!isWeChatShare) {
+                            if (isWeChatShare) {
+                                // Detect scene: 0=Friends, 1=Timeline
+                                val scene = intent.extras?.getInt("_wxapi_sendmessagetowx_req_scene") ?: 0
+                                val targetActivity = if (scene == 1)
+                                    "com.tencent.mm.ui.tools.ShareToTimeLineUI"
+                                else
+                                    "com.tencent.mm.ui.tools.ShareImgUI"
+                                component = ComponentName("com.tencent.mm", targetActivity)
+                            } else {
                                 // For QQ: bypass the intermediate QQ chooser dialog and jump directly to friends list
                                 component = ComponentName("com.tencent.mobileqq", "com.tencent.mobileqq.activity.JumpActivity")
                             }
                         }
 
-                        if (isWeChatShare) {
-                            // For WeChat: wrap in system chooser.
-                            // WeChat SDK strictly checks signatures if the intent targets WeChat directly.
-                            // By routing through the system chooser, we bypass the SDK signature validation.
-                            val chooserIntent = Intent.createChooser(plainTextIntent, "分享链接")
-                            chooserIntent.flags = intent.flags
-                            param.args[intentIndex] = chooserIntent
-                        } else {
-                            param.args[intentIndex] = plainTextIntent
+                        param.args[intentIndex] = plainTextIntent
+                    } else {
+                        val appName = if (isWeChatShare) "WeChat" else "QQ"
+                        XposedBridge.log("[DailyRacingBlocker] WARNING: $appName share detected but URL extraction failed!")
+                        intent.extras?.keySet()?.forEach { key ->
+                            XposedBridge.log("[DailyRacingBlocker] Extra key: $key")
                         }
                     }
                 } catch (t: Throwable) {
@@ -237,21 +234,21 @@ class HookEntry : IXposedHookLoadPackage {
         }
     }
 
-    private fun findUrlInBundle(bundle: Bundle?): String? {
+    private fun findUrlInBundle(bundle: Bundle?, classLoader: ClassLoader): String? {
         if (bundle == null) return null
-
-        // Direct common keys
-        val keys = arrayOf("targetUrl", "url", "share_url", "link", "webpageUrl", "_wxwebpageobject_webpageUrl", "_wxobject_webpageUrl")
-        for (key in keys) {
-            bundle.getString(key)?.let { if (it.startsWith("http")) return it }
-        }
-
-        // Search nested bundles
-        for (key in bundle.keySet()) {
-            val value = bundle.get(key)
-            if (value is Bundle) {
-                findUrlInBundle(value)?.let { return it }
+        try {
+            bundle.classLoader = classLoader
+            for (key in bundle.keySet()) {
+                val value = bundle.get(key)
+                if (value is String) {
+                    val match = Regex("https?://[^\\s]+").find(value)
+                    if (match != null) return match.value
+                } else if (value is Bundle) {
+                    findUrlInBundle(value, classLoader)?.let { return it }
+                }
             }
+        } catch (e: Exception) {
+            XposedBridge.log("[DailyRacingBlocker] Bundle unparceling error: ${e.message}")
         }
         return null
     }
