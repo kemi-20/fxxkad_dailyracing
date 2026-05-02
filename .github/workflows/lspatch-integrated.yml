@@ -217,16 +217,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/final
-          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/zipalign" -p -f 4 \
-            build/racingdaily-npatched-metadata.apk \
-            build/final/racingdaily-npatched-aligned.apk
+          # Skip zipalign: NPatch uses zip file linking (zero-copy shared data
+          # regions) to keep the APK small. Zipalign expands overlapped entries
+          # into separate copies, doubling the file size.
           "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" sign \
             --ks build/signing/release.keystore \
             --ks-key-alias "${KEY_ALIAS}" \
             --ks-pass "pass:${KEYSTORE_PASSWORD}" \
             --key-pass "pass:${KEY_PASSWORD}" \
             --out build/final/racingdaily-npatched.apk \
-            build/final/racingdaily-npatched-aligned.apk
+            build/racingdaily-npatched-metadata.apk
           "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose build/final/racingdaily-npatched.apk
 
       - name: Verify final metadata
