@@ -328,8 +328,9 @@ class HookEntry : IXposedHookLoadPackage {
     }
 
     private fun hookWeChatSendReq(classLoader: ClassLoader) {
-        // ---------- Path A: hook WeChat SDK's sendReq (impl classes only, not interfaces) ----------
+        // ---------- Path A: hook WeChat SDK's sendReq + openWXApp ----------
         val sdkImplClasses = listOf(
+            "com.tencent.mm.opensdk.openapi.BaseWXApiImplV10",
             "com.tencent.mm.opensdk.openapi.WXApiImplV10",
             "com.tencent.mm.opensdk.openapi.WXApiImplV20",
             "com.tencent.mm.sdk.openapi.WXApiImplV10",
@@ -338,15 +339,43 @@ class HookEntry : IXposedHookLoadPackage {
         for (clsName in sdkImplClasses) {
             try {
                 val cls = XposedHelpers.findClassIfExists(clsName, classLoader) ?: continue
-                XposedBridge.hookAllMethods(cls, "sendReq", object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        interceptWxSendReq(param)
-                    }
-                })
-                XposedBridge.log("[DailyRacingBlocker] hooked sendReq on $clsName")
+                for (method in listOf("sendReq", "openWXApp")) {
+                    try {
+                        XposedBridge.hookAllMethods(cls, method, object : XC_MethodHook() {
+                            override fun beforeHookedMethod(param: MethodHookParam) {
+                                if (method == "sendReq") interceptWxSendReq(param)
+                                else XposedBridge.log("[DailyRacingBlocker] openWXApp called on $clsName")
+                            }
+                        })
+                        XposedBridge.log("[DailyRacingBlocker] hooked $method on $clsName")
+                    } catch (_: Throwable) {}
+                }
             } catch (t: Throwable) {
                 XposedBridge.log("[DailyRacingBlocker] skip $clsName: ${t.message}")
             }
+        }
+
+        // ---------- Path A2: hook fluwx Flutter channel entry point ----------
+        try {
+            val fluwxHandler = XposedHelpers.findClassIfExists(
+                "com.jarvan.fluwx.handlers.FluwxShareHandler", classLoader)
+            if (fluwxHandler != null) {
+                XposedBridge.hookAllMethods(fluwxHandler, "onMethodCall", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        try {
+                            val call = param.args.getOrNull(0)
+                            val callClass = call?.javaClass
+                            val method = callClass?.getMethod("method")?.invoke(call) as? String
+                            XposedBridge.log("[DailyRacingBlocker] FLUWX share method=$method")
+                        } catch (t: Throwable) {
+                            XposedBridge.log("[DailyRacingBlocker] FLUWX onMethodCall error: ${t.message}")
+                        }
+                    }
+                })
+                XposedBridge.log("[DailyRacingBlocker] hooked FluuwxShareHandler.onMethodCall")
+            }
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] fluwx hook failed: ${t.message}")
         }
 
         // ---------- Path B: hook ContentResolver.{insert,call,query} ----------
