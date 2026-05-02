@@ -1,0 +1,47 @@
+! DailyRacingBlocker — default adblock rules
+! Lines starting with ! or # are comments.
+! Format: ||domain.com^  (blocks domain and subdomains)
+! You can also use plain "domain.com" or "0.0.0.0 domain.com" hosts-format.
+
+! Ad / tracking
+||adx.adwangmai.com^
+||gdfp.gifshow.com^
+||e.kuaishou.cn^
+||e.kuaishou.com^
+||anythinktech.com^
+||gdt.qq.com^
+||bgg.baidu.com^
+||mobads.baidu.com^
+||e.qq.com^
+||toblog.ctobsnssdk.com^
+||sf3-fe-tos.pglstatp-toutiao.com^
+||api-access.pangolin-sdk-toutiao.com^
+||api-access.pangolin-sdk-toutiao-b.com^
+||mssdk.volces.com^
+
+! Push / analytics
+||jpush.cn^
+||jpush.io^
+||umengcloud.com^
+||umeng.com^
+
+! Xiaomi tracking
+||mcc.inf.miui.com^
+||tracking.miui.com^
+
+! ByteDance tracking
+||tnc3-aliec2.zijieapi.com^
+||tnc3-alisc1.zijieapi.com^
+||tnc3-bjlgy.zijieapi.com^
+
+! Tencent tracking
+||h.trace.qq.com^
+||dns.weixin.qq.com.cn^
+||szlong.weixin.qq.com^
+
+! Kuaishou
+||zt.gifshow.com^
+||ulog-sdk.gifshow.com^
+
+! Other
+||easytomessage.com^
