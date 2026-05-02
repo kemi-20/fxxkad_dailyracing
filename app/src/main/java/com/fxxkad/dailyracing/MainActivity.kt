@@ -133,7 +133,9 @@ class MainActivity : Activity() {
 
     private fun showVersionMenu(anchor: View) {
         val popup = PopupMenu(this, anchor, Gravity.END)
-        val currentVersion = BuildConfig.VERSION_NAME
+        val currentVersion = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
+        } catch (_: Exception) { "unknown" }
         popup.menu.add("当前版本：$currentVersion").apply { isEnabled = false }
         popup.menu.add("最新版本：${latestVersion ?: "检查中..."}").apply { isEnabled = false }
         popup.menu.add("GitHub 发布页").apply {
