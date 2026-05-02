@@ -209,12 +209,30 @@ jobs:
           echo "Using NPatch output directly"
           cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
 
-      - name: Compress APK with Zopfli
+      - name: Compress APK (max deflate)
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq advancecomp
-          echo "Before: $(du -h build/racingdaily-npatched-metadata.apk | cut -f1)"
-          advzip -z4 build/racingdaily-npatched-metadata.apk
-          echo "After: $(du -h build/racingdaily-npatched-metadata.apk | cut -f1)"
+          python3 - <<'PY'
+          import zipfile, os, sys
+
+          apk_path = "build/racingdaily-npatched-metadata.apk"
+          tmp_path = apk_path + ".tmp"
+
+          orig_size = os.path.getsize(apk_path)
+          print(f"Before: {orig_size / 1024 / 1024:.1f} MB")
+
+          with zipfile.ZipFile(apk_path, 'r') as src:
+              with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as dst:
+                  for info in src.infolist():
+                      data = src.read(info.filename)
+                      if info.compress_type == zipfile.ZIP_STORED:
+                          dst.writestr(info, data, compress_type=zipfile.ZIP_STORED)
+                      else:
+                          dst.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+
+          new_size = os.path.getsize(tmp_path)
+          os.replace(tmp_path, apk_path)
+          print(f"After:  {new_size / 1024 / 1024:.1f} MB ({orig_size - new_size:,} bytes saved)")
+          PY
 
       - name: Sign integrated APK
         env:
