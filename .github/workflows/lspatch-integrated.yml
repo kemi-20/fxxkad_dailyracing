@@ -15,13 +15,13 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   BUILD_TOOLS_VERSION: "36.0.0"
-  LSPATCH_VERSION: "v0.6"
-  LSPATCH_JAR_NAME: "jar-v0.6-398-release.jar"
+  NPATCH_VERSION: "v1.0.1"
+  NPATCH_JAR_NAME: "jar-v1.0.1-577-release.jar"
   ORIGINAL_APK: "origin/racingdaily.apk"
 
 jobs:
   build-integrated:
-    name: Build integrated LSPatch APK
+    name: Build integrated NPatch APK
     runs-on: ubuntu-latest
 
     steps:
@@ -84,29 +84,29 @@ jobs:
             build/module/module-aligned.apk
           "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose build/module/xposed-module-signed.apk
 
-      - name: Download LSPatch and apktool
+      - name: Download NPatch and apktool
         run: |
           mkdir -p tools
           curl -L --fail \
-            -o tools/lspatch.jar \
-            "https://github.com/LSPosed/LSPatch/releases/download/${LSPATCH_VERSION}/${LSPATCH_JAR_NAME}"
+            -o tools/npatch.jar \
+            "https://github.com/7723mod/NPatch/releases/download/${NPATCH_VERSION}/${NPATCH_JAR_NAME}"
           curl -L --fail \
             -o tools/apktool.jar \
             "https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar"
 
-      - name: Inject module with LSPatch integrated mode
+      - name: Inject module with NPatch integrated mode
         run: |
           set -euo pipefail
-          mkdir -p build/lspatch-output
-          java -jar tools/lspatch.jar \
+          mkdir -p build/npatch-output
+          java -jar tools/npatch.jar \
             "${ORIGINAL_APK}" \
             -m build/module/xposed-module-signed.apk \
-            -o build/lspatch-output \
+            -o build/npatch-output \
             -l 2 \
             -v
-          PATCHED_APK="$(find build/lspatch-output -type f -name "*.apk" | head -n 1)"
+          PATCHED_APK="$(find build/npatch-output -type f -name "*.apk" | head -n 1)"
           test -n "${PATCHED_APK}"
-          cp "${PATCHED_APK}" build/racingdaily-lspatched-raw.apk
+          cp "${PATCHED_APK}" build/racingdaily-npatched-raw.apk
 
       - name: Preserve original version and Android SDK metadata
         run: |
@@ -124,15 +124,15 @@ jobs:
           }
 
           read_meta "${ORIGINAL_APK}" > build/original.meta
-          read_meta build/racingdaily-lspatched-raw.apk > build/patched.meta
+          read_meta build/racingdaily-npatched-raw.apk > build/patched.meta
 
           if cmp -s build/original.meta build/patched.meta; then
-            cp build/racingdaily-lspatched-raw.apk build/racingdaily-lspatched-metadata.apk
+            cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
             exit 0
           fi
 
           java -jar tools/apktool.jar d -f -s "${ORIGINAL_APK}" -o build/apktool-original
-          java -jar tools/apktool.jar d -f -s build/racingdaily-lspatched-raw.apk -o build/apktool-patched
+          java -jar tools/apktool.jar d -f -s build/racingdaily-npatched-raw.apk -o build/apktool-patched
 
           python3 - <<'PY'
           import re
@@ -159,8 +159,8 @@ jobs:
           patched_path.write_text(patched, encoding="utf-8")
           PY
 
-          java -jar tools/apktool.jar b build/apktool-patched -o build/racingdaily-lspatched-metadata.apk
-          read_meta build/racingdaily-lspatched-metadata.apk > build/restored.meta
+          java -jar tools/apktool.jar b build/apktool-patched -o build/racingdaily-npatched-metadata.apk
+          read_meta build/racingdaily-npatched-metadata.apk > build/restored.meta
           cmp build/original.meta build/restored.meta
 
       - name: Sign integrated APK
@@ -172,16 +172,16 @@ jobs:
           set -euo pipefail
           mkdir -p build/final
           "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/zipalign" -p -f 4 \
-            build/racingdaily-lspatched-metadata.apk \
-            build/final/racingdaily-lspatched-aligned.apk
+            build/racingdaily-npatched-metadata.apk \
+            build/final/racingdaily-npatched-aligned.apk
           "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" sign \
             --ks build/signing/release.keystore \
             --ks-key-alias "${KEY_ALIAS}" \
             --ks-pass "pass:${KEYSTORE_PASSWORD}" \
             --key-pass "pass:${KEY_PASSWORD}" \
-            --out build/final/racingdaily-lspatched.apk \
-            build/final/racingdaily-lspatched-aligned.apk
-          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose build/final/racingdaily-lspatched.apk
+            --out build/final/racingdaily-npatched.apk \
+            build/final/racingdaily-npatched-aligned.apk
+          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose build/final/racingdaily-npatched.apk
 
       - name: Verify final metadata
         run: |
@@ -196,11 +196,11 @@ jobs:
             printf "%s\n%s\n%s\n" "${package_meta}" "${min_sdk}" "${target_sdk}"
           }
           read_meta "${ORIGINAL_APK}" > build/original-final.meta
-          read_meta build/final/racingdaily-lspatched.apk > build/patched-final.meta
+          read_meta build/final/racingdaily-npatched.apk > build/patched-final.meta
           cmp build/original-final.meta build/patched-final.meta
 
       - name: Upload integrated APK
         uses: actions/upload-artifact@v7
         with:
-          name: racingdaily-lspatched-integrated
-          path: build/final/racingdaily-lspatched.apk
+          name: racingdaily-npatched-integrated
+          path: build/final/racingdaily-npatched.apk
