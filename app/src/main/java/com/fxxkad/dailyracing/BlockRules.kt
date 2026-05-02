@@ -5,35 +5,39 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.util.Collections
+import java.util.zip.ZipFile
 
 object BlockRules {
     const val targetPackage = "com.romielf.mrsc"
     const val zeroAddress = "0.0.0.0"
 
-    // User can drop .txt files here to add or override rules at runtime.
     private const val EXTERNAL_RULES_DIR = "/sdcard/DailyRacingBlocker/rules"
 
     private val hosts: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
 
-    /** Call once after a Context is available to reload all rule files. */
-    fun loadRules(context: android.content.Context) {
-        val moduleContext = try {
-            context.createPackageContext("com.fxxkad.dailyracing",
-                android.content.Context.CONTEXT_IGNORE_SECURITY)
-        } catch (_: Exception) { null }
-
+    /** Load all rule files. Call once after module initialisation. */
+    fun loadRules() {
         val newHosts = mutableSetOf<String>()
 
-        // 1. Built-in rules from module assets/rules/*.txt
-        if (moduleContext != null) {
-            try {
-                for (file in moduleContext.assets.list("rules") ?: emptyArray()) {
-                    if (!file.endsWith(".txt")) continue
-                    moduleContext.assets.open("rules/$file").use { stream ->
-                        parseRules(stream.reader().buffered(), file) { newHosts.add(it) }
+        // 1. Built-in rules — read directly from the module APK zip
+        try {
+            val apkPath = BlockRules::class.java.protectionDomain
+                .codeSource.location.path
+            ZipFile(apkPath).use { zip ->
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
+                    val name = entry.name
+                    if (name.startsWith("assets/rules/") && name.endsWith(".txt")) {
+                        val fileName = name.removePrefix("assets/rules/")
+                        zip.getInputStream(entry).use { stream ->
+                            parseRules(stream.reader().buffered(), fileName) { newHosts.add(it) }
+                        }
                     }
                 }
-            } catch (_: Exception) {}
+            }
+        } catch (e: Exception) {
+            XposedBridge.log("[DailyRacingBlocker] failed to load built-in rules: ${e.message}")
         }
 
         // 2. External rules from /sdcard/DailyRacingBlocker/rules/*.txt
@@ -59,38 +63,21 @@ object BlockRules {
     private fun parseRules(reader: BufferedReader, source: String, onDomain: (String) -> Unit) {
         reader.forEachLine { line ->
             val trimmed = line.trim()
-            // Skip comments and empty lines
             if (trimmed.isEmpty() || trimmed.startsWith("!") || trimmed.startsWith("#")) return@forEachLine
-            // Skip allowlist rules
             if (trimmed.startsWith("@@")) return@forEachLine
-
             val domain = extractDomain(trimmed)
-            if (domain.isNotEmpty()) {
-                onDomain(domain.lowercase())
-            }
+            if (domain.isNotEmpty()) onDomain(domain.lowercase())
         }
     }
 
     private fun extractDomain(line: String): String {
-        // Hosts-file style: "0.0.0.0 example.com"
         val hostsMatch = Regex("^(?:0\\.0\\.0\\.0|127\\.0\\.0\\.1)\\s+(.+)").find(line)
-        if (hostsMatch != null) {
-            return hostsMatch.groupValues[1].trim()
-        }
+        if (hostsMatch != null) return hostsMatch.groupValues[1].trim()
 
-        // Adblock style: "||example.com^"
-        // Strip leading || and trailing ^
         var domain = line.trimStart('|').trimEnd('^')
-
-        // Remove protocol if present
         domain = domain.removePrefix("http://").removePrefix("https://")
-
-        // Remove path, port, wildcards
         domain = domain.split("/", "#", " ", ":")[0]
-
-        // Remove leading wildcards
         domain = domain.trimStart('*', '.')
-
         return domain.trim()
     }
 

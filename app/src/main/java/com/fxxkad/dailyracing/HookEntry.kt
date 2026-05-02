@@ -41,7 +41,7 @@ class HookEntry : IXposedHookLoadPackage {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     targetContext = (param.args.firstOrNull() as? Context)?.applicationContext
                     XposedBridge.log("[DailyRacingBlocker] context attached")
-                    BlockRules.loadRules(targetContext!!)
+                    BlockRules.loadRules()
                     flushPendingRecords()
                 }
             }
