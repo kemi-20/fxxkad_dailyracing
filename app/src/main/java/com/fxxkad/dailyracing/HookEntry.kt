@@ -2,9 +2,11 @@ package com.fxxkad.dailyracing
 
 import android.app.Application
 import android.content.ComponentName
+import android.content.ContentResolver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
 import android.util.Base64
@@ -252,53 +254,116 @@ class HookEntry : IXposedHookLoadPackage {
     }
 
     private fun hookWeChatSendReq(classLoader: ClassLoader) {
-        try {
-            val iwxApi = XposedHelpers.findClassIfExists(
-                "com.tencent.mm.opensdk.openapi.IWXAPI", classLoader) ?: return
-            XposedBridge.hookAllMethods(iwxApi, "sendReq", object : XC_MethodHook() {
+        // ---------- Path A: hook WeChat SDK's sendReq directly ----------
+        val sdkClasses = listOf(
+            "com.tencent.mm.opensdk.openapi.IWXAPI",          // new SDK interface
+            "com.tencent.mm.opensdk.openapi.WXApiImplV10",    // new SDK impl
+            "com.tencent.mm.sdk.openapi.IWXAPI",               // old SDK interface
+            "com.tencent.mm.sdk.openapi.WXApiImplV10",         // old SDK impl
+        )
+        var sdkHooked = false
+        for (clsName in sdkClasses) {
+            val cls = XposedHelpers.findClassIfExists(clsName, classLoader) ?: continue
+            XposedBridge.hookAllMethods(cls, "sendReq", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    try {
-                        val req = param.args.getOrNull(0) ?: return
-                        if (!req.javaClass.name.contains("SendMessageToWX")) return
-                        val message = XposedHelpers.getObjectField(req, "message") ?: return
-
-                        val mediaObject = try {
-                            XposedHelpers.getObjectField(message, "mediaObject")
-                        } catch (_: Exception) { null }
-
-                        val url = if (mediaObject != null &&
-                            mediaObject.javaClass.name.contains("WXWebpageObject")) {
-                            try {
-                                XposedHelpers.getObjectField(mediaObject, "webpageUrl") as? String
-                            } catch (_: Exception) { null }
-                        } else null
-
-                        if (url.isNullOrEmpty()) return
-
-                        XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, URL=$url")
-
-                        // Block the original sendReq (which would use ContentProvider →
-                        // WeChat SDK checks signature and WeChat rejects the self-signed caller)
-                        param.result = true
-
-                        // Fire a plain-text share through the system chooser instead
-                        val ctx = resolveContext() ?: return
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, url)
-                            `package` = "com.tencent.mm"
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        }
-                        ctx.startActivity(Intent.createChooser(intent, null))
-                    } catch (t: Throwable) {
-                        XposedBridge.log("[DailyRacingBlocker] WX sendReq hook error: ${t.message}")
-                    }
+                    interceptWxSendReq(param)
                 }
             })
-            XposedBridge.log("[DailyRacingBlocker] hooked IWXAPI.sendReq")
-        } catch (t: Throwable) {
-            XposedBridge.log("[DailyRacingBlocker] failed to hook WX sendReq: ${t.message}")
+            XposedBridge.log("[DailyRacingBlocker] hooked sendReq on $clsName")
+            sdkHooked = true
+            break
         }
+
+        // ---------- Path B: fallback — hook ContentResolver.insert ----------
+        // The WeChat SDK internally calls ContentResolver.insert() with a
+        // WeChat-specific content URI. Catch it as a last-resort interception.
+        if (!sdkHooked) {
+            XposedBridge.log("[DailyRacingBlocker] No WeChat SDK sendReq found, installing ContentResolver hook")
+        }
+        try {
+            XposedBridge.hookAllMethods(ContentResolver::class.java, "insert",
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val uri = param.args.getOrNull(0) as? Uri ?: return
+                        val auth = uri.authority ?: return
+                        if (!auth.contains("tencent.mm")) return
+                        interceptWxContentInsert(param)
+                    }
+                })
+            XposedBridge.log("[DailyRacingBlocker] hooked ContentResolver.insert for WeChat")
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] failed to hook ContentResolver: ${t.message}")
+        }
+    }
+
+    // --- WeChat interception helpers ---
+
+    private fun interceptWxSendReq(param: XC_MethodHook.MethodHookParam) {
+        try {
+            val req = param.args.getOrNull(0) ?: return
+            if (!req.javaClass.name.contains("SendMessageToWX")) return
+            val url = extractUrlFromWxMessage(req) ?: return
+
+            XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, URL=$url")
+            param.result = true          // pretend success; original call never reaches WeChat
+            startWxPlainTextShare(url)
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] sendReq hook error: ${t.message}")
+        }
+    }
+
+    private fun interceptWxContentInsert(param: XC_MethodHook.MethodHookParam) {
+        try {
+            val values = param.args.getOrNull(1) as? ContentValues ?: return
+            // Walk every value looking for a http(s) URL (the share link is buried inside
+            // serialised request bundles / ByteArrays inside the ContentValues).
+            var foundUrl: String? = null
+            for (key in values.keySet()) {
+                val v = values.get(key)
+                val str = v?.toString() ?: continue
+                val m = Regex("https?://[^\\s]+").find(str)
+                if (m != null && m.value.length > 20) { // filter short false positives
+                    foundUrl = m.value
+                    break
+                }
+            }
+            if (foundUrl.isNullOrEmpty()) return
+
+            XposedBridge.log("[DailyRacingBlocker] Intercepted WX ContentProvider insert, URL=$foundUrl")
+            // Return a fake success URI so the WeChat SDK doesn't show an error
+            param.result = Uri.parse("content://com.tencent.mm.sdk.comm.provider/response/0")
+            startWxPlainTextShare(foundUrl)
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] ContentResolver hook error: ${t.message}")
+        }
+    }
+
+    private fun extractUrlFromWxMessage(req: Any): String? {
+        val message = XposedHelpers.getObjectField(req, "message") ?: return null
+        val mediaObject = try {
+            XposedHelpers.getObjectField(message, "mediaObject")
+        } catch (_: Exception) { null }
+
+        if (mediaObject != null && mediaObject.javaClass.name.contains("WXWebpageObject")) {
+            try {
+                return XposedHelpers.getObjectField(mediaObject, "webpageUrl") as? String
+            } catch (_: Exception) {}
+        }
+        // Fallback: try description / messageExt
+        try { return XposedHelpers.getObjectField(message, "description") as? String } catch (_: Exception) {}
+        try { return XposedHelpers.getObjectField(message, "messageExt") as? String } catch (_: Exception) {}
+        return null
+    }
+
+    private fun startWxPlainTextShare(url: String) {
+        val ctx = resolveContext() ?: return
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, url)
+            `package` = "com.tencent.mm"
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        ctx.startActivity(Intent.createChooser(intent, null))
     }
 
     private fun findUrlInBundle(bundle: Bundle?, classLoader: ClassLoader): String? {
@@ -362,8 +427,8 @@ class HookEntry : IXposedHookLoadPackage {
                 put(BlockRecordStore.COL_RESULT, event.result)
             }
             providerSaved = context.contentResolver.insert(BlockRecordProvider.CONTENT_URI, values) != null
-        } catch (t: Throwable) {
-            XposedBridge.log("[DailyRacingBlocker] failed to save record: ${t.message}")
+        } catch (_: Throwable) {
+            // Provider unreachable in target process — will fall back to broadcast
         }
         if (!providerSaved) {
             sendRecordBroadcast(context, event)
