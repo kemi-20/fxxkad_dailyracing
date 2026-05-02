@@ -4,6 +4,9 @@ import android.app.Application
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
+import android.os.IBinder
+import android.util.Base64
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
@@ -24,6 +27,7 @@ class HookEntry : IXposedHookLoadPackage {
         hookApplicationAttach()
         hookInetAddress(lpparam.packageName)
         hookAndroidNameService(lpparam.packageName)
+        hookQQShareIntent(lpparam.classLoader)
     }
 
     private fun hookApplicationAttach() {
@@ -85,6 +89,95 @@ class HookEntry : IXposedHookLoadPackage {
             XposedBridge.log("[DailyRacingBlocker] hooked Inet6AddressImpl.lookupAllHostAddr")
         } catch (t: Throwable) {
             XposedBridge.log("[DailyRacingBlocker] failed to hook Android name service: ${t.message}")
+        }
+    }
+
+    private fun hookQQShareIntent(classLoader: ClassLoader) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                "android.app.Instrumentation",
+                classLoader,
+                "execStartActivity",
+                Context::class.java,
+                IBinder::class.java,
+                IBinder::class.java,
+                android.app.Activity::class.java,
+                Intent::class.java,
+                Int::class.java,
+                Bundle::class.java,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        try {
+                            val intent = param.args[4] as? Intent ?: return
+
+                            // Check if this is a QQ share intent
+                            val action = intent.action
+                            val dataString = intent.dataString ?: ""
+                            val componentName = intent.component?.className ?: ""
+                            val targetPackage = intent.`package` ?: intent.component?.packageName ?: ""
+
+                            val isQQShare = targetPackage == "com.tencent.mobileqq" ||
+                                          dataString.startsWith("mqqapi://share/") ||
+                                          componentName.contains("com.tencent.connect.common.AssistActivity")
+
+                            if (!isQQShare) return
+
+                            var urlToShare: String? = null
+
+                            // Extract URL from standard ACTION_SEND
+                            if (action == Intent.ACTION_SEND) {
+                                urlToShare = intent.getStringExtra(Intent.EXTRA_TEXT)
+                            }
+                            // Extract URL from mqqapi rich share
+                            else if (dataString.startsWith("mqqapi://share/")) {
+                                val uri = intent.data ?: return
+                                val encodedUrl = uri.getQueryParameter("url")
+                                if (!encodedUrl.isNullOrEmpty()) {
+                                    try {
+                                        urlToShare = String(Base64.decode(encodedUrl, Base64.DEFAULT))
+                                    } catch (_: Exception) {
+                                        urlToShare = encodedUrl // Maybe not base64
+                                    }
+                                }
+                            }
+                            // Extract URL from Tencent Open SDK AssistActivity
+                            else if (intent.extras != null) {
+                                val bundle = intent.extras
+                                urlToShare = bundle?.getString("targetUrl") ?:
+                                             bundle?.getString("url") ?:
+                                             bundle?.getBundle("key_params")?.getString("targetUrl")
+                            }
+
+                            if (urlToShare.isNullOrEmpty()) {
+                                // If it's a URL wrapped in some other text, try to extract just the http(s) part
+                                val anyText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
+                                val httpMatch = Regex("https?://[^\\s]+").find(anyText)
+                                if (httpMatch != null) {
+                                    urlToShare = httpMatch.value
+                                }
+                            }
+
+                            if (!urlToShare.isNullOrEmpty()) {
+                                XposedBridge.log("[DailyRacingBlocker] Intercepted QQ rich share, converting to text: $urlToShare")
+
+                                val plainTextIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, urlToShare)
+                                    // Set package to QQ to ensure it directly opens QQ instead of chooser
+                                    `package` = "com.tencent.mobileqq"
+                                }
+
+                                param.args[4] = plainTextIntent
+                            }
+                        } catch (t: Throwable) {
+                            XposedBridge.log("[DailyRacingBlocker] Error in QQ share hook: ${t.message}")
+                        }
+                    }
+                }
+            )
+            XposedBridge.log("[DailyRacingBlocker] hooked Instrumentation.execStartActivity for QQ share")
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] failed to hook QQ share: ${t.message}")
         }
     }
 
