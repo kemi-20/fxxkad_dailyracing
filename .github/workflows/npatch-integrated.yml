@@ -6,7 +6,7 @@ on:
     branches:
       - main
     paths:
-      - ".github/workflows/lspatch-integrated.yml"
+      - ".github/workflows/npatch-integrated.yml"
       - "app/**"
       - "build.gradle"
       - "settings.gradle"
