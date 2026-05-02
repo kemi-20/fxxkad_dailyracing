@@ -94,132 +94,166 @@ class HookEntry : IXposedHookLoadPackage {
     }
 
     private fun hookShareIntent(classLoader: ClassLoader) {
-        try {
-            XposedHelpers.findAndHookMethod(
-                "android.app.Instrumentation",
-                classLoader,
-                "execStartActivity",
-                Context::class.java,
-                IBinder::class.java,
-                IBinder::class.java,
-                android.app.Activity::class.java,
-                Intent::class.java,
-                Int::class.java,
-                Bundle::class.java,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
+        val shareHook = object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                try {
+                    val intentIndex = param.args.indexOfFirst { it is Intent }
+                    if (intentIndex == -1) return
+                    val intent = param.args[intentIndex] as Intent
+
+                    val action = intent.action
+                    val dataString = intent.dataString ?: ""
+                    val componentName = intent.component?.className ?: ""
+                    val targetPackage = intent.`package` ?: intent.component?.packageName ?: ""
+
+                    val isQQShare = targetPackage == "com.tencent.mobileqq" ||
+                            dataString.startsWith("mqqapi://share/") ||
+                            componentName.contains("com.tencent.connect.common.AssistActivity")
+
+                    val isWeChatShare = targetPackage == "com.tencent.mm" ||
+                            componentName.startsWith("com.tencent.mm.") ||
+                            action == "com.tencent.mm.action.SEND" ||
+                            intent.hasExtra("_wxapi_command_type")
+
+                    if (!isQQShare && !isWeChatShare) return
+
+                    // Check if the fix is enabled via the host app's ContentProvider
+                    val context = resolveContext()
+                    if (context != null) {
                         try {
-                            val intent = param.args[4] as? Intent ?: return
-
-                            val action = intent.action
-                            val dataString = intent.dataString ?: ""
-                            val componentName = intent.component?.className ?: ""
-                            val targetPackage = intent.`package` ?: intent.component?.packageName ?: ""
-
-                            val isQQShare = targetPackage == "com.tencent.mobileqq" ||
-                                          dataString.startsWith("mqqapi://share/") ||
-                                          componentName.contains("com.tencent.connect.common.AssistActivity")
-
-                            val isWeChatShare = targetPackage == "com.tencent.mm" ||
-                                              componentName.startsWith("com.tencent.mm.") ||
-                                              action == "com.tencent.mm.action.SEND"
-
-                            if (!isQQShare && !isWeChatShare) return
-
-                            // Check if the fix is enabled via the host app's ContentProvider
-                            val context = resolveContext()
-                            if (context != null) {
-                                try {
-                                    val uri = android.net.Uri.parse("content://com.fxxkad.dailyracing.records/records")
-                                    val bundle = context.contentResolver.call(uri, "get_setting", "fix_share", null)
-                                    val isEnabled = bundle?.getBoolean("value", true) ?: true
-                                    if (!isEnabled) {
-                                        return // User disabled the share fix
-                                    }
-                                } catch (_: Exception) {}
+                            val uri = android.net.Uri.parse("content://com.fxxkad.dailyracing.records/records")
+                            val bundle = context.contentResolver.call(uri, "get_setting", "fix_share", null)
+                            val isEnabled = bundle?.getBoolean("value", true) ?: true
+                            if (!isEnabled) {
+                                return // User disabled the share fix
                             }
+                        } catch (_: Exception) {}
+                    }
 
-                            var urlToShare: String? = null
+                    var urlToShare: String? = null
 
-                            // Extract URL from standard ACTION_SEND
-                            if (action == Intent.ACTION_SEND) {
-                                urlToShare = intent.getStringExtra(Intent.EXTRA_TEXT)
+                    // Extract URL from standard ACTION_SEND
+                    if (action == Intent.ACTION_SEND) {
+                        urlToShare = intent.getStringExtra(Intent.EXTRA_TEXT)
+                    }
+                    // Extract URL from mqqapi rich share
+                    else if (dataString.startsWith("mqqapi://share/")) {
+                        val uri = intent.data ?: return
+                        val encodedUrl = uri.getQueryParameter("url")
+                        if (!encodedUrl.isNullOrEmpty()) {
+                            try {
+                                urlToShare = String(Base64.decode(encodedUrl, Base64.DEFAULT))
+                            } catch (_: Exception) {
+                                urlToShare = encodedUrl // Maybe not base64
                             }
-                            // Extract URL from mqqapi rich share
-                            else if (dataString.startsWith("mqqapi://share/")) {
-                                val uri = intent.data ?: return
-                                val encodedUrl = uri.getQueryParameter("url")
-                                if (!encodedUrl.isNullOrEmpty()) {
-                                    try {
-                                        urlToShare = String(Base64.decode(encodedUrl, Base64.DEFAULT))
-                                    } catch (_: Exception) {
-                                        urlToShare = encodedUrl // Maybe not base64
-                                    }
-                                }
-                            }
-                            // Extract URL from Tencent Open SDK AssistActivity or WeChat intent
-                            else if (intent.extras != null) {
-                                val bundle = intent.extras
-                                urlToShare = bundle?.getString("targetUrl") ?:
-                                             bundle?.getString("url") ?:
-                                             bundle?.getString("_wxapi_sendauth_req_extData") ?:
-                                             bundle?.getBundle("key_params")?.getString("targetUrl")
-
-                                if (urlToShare.isNullOrEmpty() && bundle != null) {
-                                    // Deep inspection for WeChat WXWebpageObject
-                                    val wxMsgBundle = bundle.getBundle("_wxapi_sendmessagetowx_req_message")
-                                    if (wxMsgBundle != null) {
-                                        urlToShare = wxMsgBundle.getString("_wxobject_webpageUrl") ?:
-                                                     wxMsgBundle.getString("_wxobject_message_ext") ?:
-                                                     wxMsgBundle.getString("_wxobject_message_actionUrl")
-                                    }
-                                }
-                            }
-
-                            if (urlToShare.isNullOrEmpty()) {
-                                // If it's a URL wrapped in some other text, try to extract just the http(s) part
-                                val anyText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
-                                val httpMatch = Regex("https?://[^\\s]+").find(anyText)
-                                if (httpMatch != null) {
-                                    urlToShare = httpMatch.value
-                                }
-                            }
-
-                            if (!urlToShare.isNullOrEmpty()) {
-                                val appName = if (isWeChatShare) "WeChat" else "QQ"
-                                XposedBridge.log("[DailyRacingBlocker] Intercepted $appName rich share, converting to text: $urlToShare")
-
-                                val plainTextIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, urlToShare)
-
-                                    if (!isWeChatShare) {
-                                        // For QQ: bypass the intermediate QQ chooser dialog and jump directly to friends list
-                                        component = ComponentName("com.tencent.mobileqq", "com.tencent.mobileqq.activity.JumpActivity")
-                                    }
-                                }
-
-                                if (isWeChatShare) {
-                                    // For WeChat: wrap in system chooser.
-                                    // WeChat SDK strictly checks signatures if the intent targets WeChat directly.
-                                    // By routing through the system chooser, we bypass the SDK signature validation.
-                                    val chooserIntent = Intent.createChooser(plainTextIntent, "分享链接")
-                                    chooserIntent.flags = intent.flags
-                                    param.args[4] = chooserIntent
-                                } else {
-                                    param.args[4] = plainTextIntent
-                                }
-                            }
-                        } catch (t: Throwable) {
-                            XposedBridge.log("[DailyRacingBlocker] Error in share hook: ${t.message}")
                         }
                     }
+                    // Extract URL from Tencent Open SDK AssistActivity or WeChat intent
+                    else if (intent.extras != null) {
+                        val bundle = intent.extras
+                        urlToShare = bundle?.getString("targetUrl") ?:
+                                bundle?.getString("url") ?:
+                                bundle?.getString("share_url") ?:
+                                bundle?.getString("link") ?:
+                                bundle?.getString("_wxapi_sendauth_req_extData") ?:
+                                bundle?.getBundle("key_params")?.getString("targetUrl")
+
+                        if (urlToShare.isNullOrEmpty() && bundle != null) {
+                            // Deep inspection for WeChat WXWebpageObject or other nested bundles
+                            urlToShare = findUrlInBundle(bundle)
+                        }
+                    }
+
+                    if (urlToShare.isNullOrEmpty()) {
+                        // If it's a URL wrapped in some other text, try to extract just the http(s) part
+                        val anyText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
+                        val httpMatch = Regex("https?://[^\\s]+").find(anyText)
+                        if (httpMatch != null) {
+                            urlToShare = httpMatch.value
+                        }
+                    }
+
+                    if (!urlToShare.isNullOrEmpty()) {
+                        val appName = if (isWeChatShare) "WeChat" else "QQ"
+                        XposedBridge.log("[DailyRacingBlocker] Intercepted $appName rich share, converting to text: $urlToShare")
+
+                        val plainTextIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, urlToShare)
+
+                            if (!isWeChatShare) {
+                                // For QQ: bypass the intermediate QQ chooser dialog and jump directly to friends list
+                                component = ComponentName("com.tencent.mobileqq", "com.tencent.mobileqq.activity.JumpActivity")
+                            }
+                        }
+
+                        if (isWeChatShare) {
+                            // For WeChat: wrap in system chooser.
+                            // WeChat SDK strictly checks signatures if the intent targets WeChat directly.
+                            // By routing through the system chooser, we bypass the SDK signature validation.
+                            val chooserIntent = Intent.createChooser(plainTextIntent, "分享链接")
+                            chooserIntent.flags = intent.flags
+                            param.args[intentIndex] = chooserIntent
+                        } else {
+                            param.args[intentIndex] = plainTextIntent
+                        }
+                    }
+                } catch (t: Throwable) {
+                    XposedBridge.log("[DailyRacingBlocker] Error in share hook: ${t.message}")
                 }
+            }
+        }
+
+        try {
+            XposedBridge.hookAllMethods(
+                XposedHelpers.findClass("android.app.Instrumentation", classLoader),
+                "execStartActivity",
+                shareHook
             )
             XposedBridge.log("[DailyRacingBlocker] hooked Instrumentation.execStartActivity for share")
         } catch (t: Throwable) {
-            XposedBridge.log("[DailyRacingBlocker] failed to hook share: ${t.message}")
+            XposedBridge.log("[DailyRacingBlocker] failed to hook Instrumentation: ${t.message}")
         }
+
+        try {
+            XposedBridge.hookAllMethods(
+                android.app.Activity::class.java,
+                "startActivityForResult",
+                shareHook
+            )
+            XposedBridge.log("[DailyRacingBlocker] hooked Activity.startActivityForResult for share")
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] failed to hook Activity: ${t.message}")
+        }
+
+        try {
+            val contextImplClass = XposedHelpers.findClassIfExists("android.app.ContextImpl", classLoader)
+            if (contextImplClass != null) {
+                XposedBridge.hookAllMethods(contextImplClass, "startActivity", shareHook)
+                XposedBridge.log("[DailyRacingBlocker] hooked ContextImpl.startActivity for share")
+            }
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] failed to hook ContextImpl: ${t.message}")
+        }
+    }
+
+    private fun findUrlInBundle(bundle: Bundle?): String? {
+        if (bundle == null) return null
+
+        // Direct common keys
+        val keys = arrayOf("targetUrl", "url", "share_url", "link", "webpageUrl", "_wxwebpageobject_webpageUrl", "_wxobject_webpageUrl")
+        for (key in keys) {
+            bundle.getString(key)?.let { if (it.startsWith("http")) return it }
+        }
+
+        // Search nested bundles
+        for (key in bundle.keySet()) {
+            val value = bundle.get(key)
+            if (value is Bundle) {
+                findUrlInBundle(value)?.let { return it }
+            }
+        }
+        return null
     }
 
     private fun zeroInetAddress(host: String?): InetAddress {
