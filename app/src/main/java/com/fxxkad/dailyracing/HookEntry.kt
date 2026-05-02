@@ -164,6 +164,16 @@ class HookEntry : IXposedHookLoadPackage {
                                              bundle?.getString("url") ?:
                                              bundle?.getString("_wxapi_sendauth_req_extData") ?:
                                              bundle?.getBundle("key_params")?.getString("targetUrl")
+
+                                if (urlToShare.isNullOrEmpty() && bundle != null) {
+                                    // Deep inspection for WeChat WXWebpageObject
+                                    val wxMsgBundle = bundle.getBundle("_wxapi_sendmessagetowx_req_message")
+                                    if (wxMsgBundle != null) {
+                                        urlToShare = wxMsgBundle.getString("_wxobject_webpageUrl") ?:
+                                                     wxMsgBundle.getString("_wxobject_message_ext") ?:
+                                                     wxMsgBundle.getString("_wxobject_message_actionUrl")
+                                    }
+                                }
                             }
 
                             if (urlToShare.isNullOrEmpty()) {
@@ -184,8 +194,8 @@ class HookEntry : IXposedHookLoadPackage {
                                     putExtra(Intent.EXTRA_TEXT, urlToShare)
 
                                     if (isWeChatShare) {
-                                        // Target WeChat's "Share to Chat" screen directly
-                                        component = ComponentName("com.tencent.mm", "com.tencent.mm.ui.tools.ShareImgUI")
+                                        // Clear specific components, let Android resolve to WeChat's default receiver
+                                        `package` = "com.tencent.mm"
                                     } else {
                                         // Bypass the intermediate QQ chooser dialog and jump directly to friends list
                                         component = ComponentName("com.tencent.mobileqq", "com.tencent.mobileqq.activity.JumpActivity")
