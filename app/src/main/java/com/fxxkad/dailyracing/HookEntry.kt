@@ -281,26 +281,28 @@ class HookEntry : IXposedHookLoadPackage {
     private var crLogCount = 0
 
     private fun hookWeChatSendReq(classLoader: ClassLoader) {
-        // ---------- Path A: hook WeChat SDK's sendReq ----------
-        val sdkClasses = listOf(
-            "com.tencent.mm.opensdk.openapi.IWXAPI",
+        // ---------- Path A: hook WeChat SDK's sendReq (impl classes only, not interfaces) ----------
+        val sdkImplClasses = listOf(
             "com.tencent.mm.opensdk.openapi.WXApiImplV10",
-            "com.tencent.mm.sdk.openapi.IWXAPI",
+            "com.tencent.mm.opensdk.openapi.WXApiImplV20",
             "com.tencent.mm.sdk.openapi.WXApiImplV10",
+            "com.tencent.mm.sdk.openapi.WXApiImplV20",
         )
-        for (clsName in sdkClasses) {
-            val cls = XposedHelpers.findClassIfExists(clsName, classLoader) ?: continue
-            XposedBridge.hookAllMethods(cls, "sendReq", object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    interceptWxSendReq(param)
-                }
-            })
-            XposedBridge.log("[DailyRacingBlocker] hooked sendReq on $clsName")
+        for (clsName in sdkImplClasses) {
+            try {
+                val cls = XposedHelpers.findClassIfExists(clsName, classLoader) ?: continue
+                XposedBridge.hookAllMethods(cls, "sendReq", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        interceptWxSendReq(param)
+                    }
+                })
+                XposedBridge.log("[DailyRacingBlocker] hooked sendReq on $clsName")
+            } catch (t: Throwable) {
+                XposedBridge.log("[DailyRacingBlocker] skip $clsName: ${t.message}")
+            }
         }
 
         // ---------- Path B: hook ContentResolver.{insert,call,query} ----------
-        // Log every authority the target app talks to (first 30 calls) to
-        // identify the WeChat IPC channel, then intercept it.
         val crHook = object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 val uri = param.args.getOrNull(0) as? Uri ?: return
