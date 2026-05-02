@@ -95,6 +95,10 @@ jobs:
             "https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar"
 
       - name: Inject module with NPatch integrated mode
+        env:
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p build/npatch-output
@@ -103,10 +107,21 @@ jobs:
             -m build/module/xposed-module-signed.apk \
             -o build/npatch-output \
             -l 2 \
+            -k build/signing/release.keystore "${KEYSTORE_PASSWORD}" "${KEY_ALIAS}" "${KEY_PASSWORD}" \
             -v
           PATCHED_APK="$(find build/npatch-output -type f -name "*.apk" | head -n 1)"
           test -n "${PATCHED_APK}"
           cp "${PATCHED_APK}" build/racingdaily-npatched-raw.apk
+          # NPatch catches PatchError but exits 0; validate output ourselves
+          python3 -c "
+          import zipfile, sys
+          with zipfile.ZipFile('build/racingdaily-npatched-raw.apk') as z:
+              names = z.namelist()
+              if 'AndroidManifest.xml' not in names:
+                  print('ERROR: NPatch output is missing AndroidManifest.xml', file=sys.stderr)
+                  sys.exit(1)
+          print(f'NPatch output OK ({len(names)} entries, AndroidManifest.xml present)')
+          "
 
       - name: Preserve original version and Android SDK metadata
         env:
