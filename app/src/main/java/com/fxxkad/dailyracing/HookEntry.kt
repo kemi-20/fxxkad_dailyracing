@@ -326,20 +326,74 @@ class HookEntry : IXposedHookLoadPackage {
             }
         }
 
-        // ---------- Path C: hook sendBroadcast ----------
-        try {
-            val cwClass = XposedHelpers.findClass("android.content.ContextWrapper", classLoader)
-            XposedBridge.hookAllMethods(cwClass, "sendBroadcast", object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val intent = param.args.getOrNull(0) as? Intent ?: return
-                    val pkg = intent.`package` ?: intent.component?.packageName ?: ""
-                    if (pkg != "com.tencent.mm") return
-                    interceptWxBroadcast(intent, classLoader)
-                }
-            })
-            XposedBridge.log("[DailyRacingBlocker] hooked ContextWrapper.sendBroadcast")
-        } catch (t: Throwable) {
-            XposedBridge.log("[DailyRacingBlocker] failed to hook sendBroadcast: ${t.message}")
+        // ---------- Path C: hook sendBroadcast / bindService / startService ----------
+        val cwClass = try {
+            XposedHelpers.findClass("android.content.ContextWrapper", classLoader)
+        } catch (_: Throwable) { null }
+        if (cwClass != null) {
+            // sendBroadcast
+            try {
+                XposedBridge.hookAllMethods(cwClass, "sendBroadcast", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val intent = param.args.getOrNull(0) as? Intent ?: return
+                        val pkg = intent.`package` ?: intent.component?.packageName ?: ""
+                        if (pkg == "com.tencent.mm")
+                            XposedBridge.log("[DailyRacingBlocker] SEND_BROADCAST -> com.tencent.mm")
+                        interceptWxBroadcast(intent, classLoader)
+                    }
+                })
+                XposedBridge.log("[DailyRacingBlocker] hooked ContextWrapper.sendBroadcast")
+            } catch (t: Throwable) {
+                XposedBridge.log("[DailyRacingBlocker] failed sendBroadcast: ${t.message}")
+            }
+            // bindService
+            try {
+                XposedBridge.hookAllMethods(cwClass, "bindService", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val intent = param.args.getOrNull(0) as? Intent ?: return
+                        val pkg = intent.`package` ?: intent.component?.packageName ?: ""
+                        XposedBridge.log("[DailyRacingBlocker] BIND_SERVICE pkg=$pkg comp=${intent.component?.className}")
+                        if (pkg == "com.tencent.mm") {
+                            XposedBridge.log("[DailyRacingBlocker] >>> bindService to WeChat detected!")
+                        }
+                    }
+                })
+                XposedBridge.log("[DailyRacingBlocker] hooked ContextWrapper.bindService")
+            } catch (t: Throwable) {
+                XposedBridge.log("[DailyRacingBlocker] failed bindService: ${t.message}")
+            }
+            // startService
+            try {
+                XposedBridge.hookAllMethods(cwClass, "startService", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val intent = param.args.getOrNull(0) as? Intent ?: return
+                        val pkg = intent.`package` ?: intent.component?.packageName ?: ""
+                        XposedBridge.log("[DailyRacingBlocker] START_SERVICE pkg=$pkg comp=${intent.component?.className}")
+                    }
+                })
+                XposedBridge.log("[DailyRacingBlocker] hooked ContextWrapper.startService")
+            } catch (t: Throwable) {
+                XposedBridge.log("[DailyRacingBlocker] failed startService: ${t.message}")
+            }
+        }
+
+        // ---------- Path D: monitor all WXApiImplV10 methods ----------
+        val wxImplClass = XposedHelpers.findClassIfExists(
+            "com.tencent.mm.opensdk.openapi.WXApiImplV10", classLoader)
+        if (wxImplClass != null) {
+            val wxMethods = listOf("sendReq", "sendResp", "registerApp", "detach",
+                "isWXAppInstalled", "openWXApp", "unregisterApp", "handleWxInternalResp")
+            for (m in wxMethods) {
+                try {
+                    XposedBridge.hookAllMethods(wxImplClass, m, object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            val args = param.args.map { it?.javaClass?.simpleName ?: "null" }
+                            XposedBridge.log("[DailyRacingBlocker] WXApi.${param.method.name}($args) called")
+                        }
+                    })
+                } catch (_: Throwable) {}
+            }
+            XposedBridge.log("[DailyRacingBlocker] hooked WXApiImplV10 methods: ${wxMethods}")
         }
     }
 
