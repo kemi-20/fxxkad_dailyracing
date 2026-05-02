@@ -1,160 +1,87 @@
 package com.fxxkad.dailyracing
 
-import android.app.Activity
+import android.app.Application
 import android.content.Intent
 import android.database.Cursor
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
-import android.text.TextUtils
 import android.text.format.DateFormat
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.view.Window
-import android.widget.BaseAdapter
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ListView
-import android.widget.PopupMenu
-import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-class MainActivity : Activity() {
-    private lateinit var totalView: TextView
-    private lateinit var uniqueView: TextView
-    private lateinit var rulesView: TextView
-    private lateinit var statusView: TextView
-    private lateinit var emptyView: TextView
-    private lateinit var adapter: RecordAdapter
+data class BlockRecord(
+    val id: Long,
+    val time: Long,
+    val host: String,
+    val source: String,
+    val result: String
+)
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        requestWindowFeature(Window.FEATURE_NO_TITLE)
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val _records = MutableStateFlow<List<BlockRecord>>(emptyList())
+    val records = _records.asStateFlow()
 
-        adapter = RecordAdapter()
-        setContentView(buildContentView())
+    private val _latestVersion = MutableStateFlow<String?>(null)
+    val latestVersion = _latestVersion.asStateFlow()
+
+    private val DISPLAY_DEDUP_WINDOW_MS = 60_000L
+
+    init {
         refreshRecords()
     }
 
-    override fun onResume() {
-        super.onResume()
-        refreshRecords()
-    }
-
-    private fun buildContentView(): View {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(COLOR_BG)
-            setPadding(dp(16), dp(14), dp(16), dp(12))
-        }
-
-        root.addView(buildHeader())
-        root.addView(buildStats())
-        root.addView(buildActions())
-
-        val listWrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = round(Color.WHITE, 14f)
-            setPadding(0, dp(6), 0, dp(6))
-        }
-        listWrap.addView(TextView(this).apply {
-            text = "拦截日志"
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(COLOR_TEXT)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-        })
-
-        emptyView = TextView(this).apply {
-            text = "暂无拦截记录\n覆盖安装后请在 LSPosed 确认模块启用，并强停 com.romielf.mrsc 后重新打开"
-            textSize = 14f
-            gravity = Gravity.CENTER
-            setTextColor(COLOR_MUTED)
-            setPadding(dp(22), dp(34), dp(22), dp(34))
-        }
-        listWrap.addView(emptyView, LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-
-        listWrap.addView(ListView(this).apply {
-            divider = null
-            dividerHeight = 0
-            cacheColorHint = Color.TRANSPARENT
-            adapter = this@MainActivity.adapter
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        root.addView(listWrap, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-        return root
-    }
-
-    private var latestVersion: String? = null
-
-    private fun buildHeader(): View {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = round(COLOR_GREEN_DARK, 16f)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-
-            // Title row: title + ⋮ menu button
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-
-                addView(TextView(this@MainActivity).apply {
-                    text = "每日赛车 DNS 拦截"
-                    textSize = 22f
-                    typeface = Typeface.DEFAULT_BOLD
-                    setTextColor(Color.WHITE)
-                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-
-                addView(TextView(this@MainActivity).apply {
-                    text = "⋮"
-                    textSize = 24f
-                    typeface = Typeface.DEFAULT_BOLD
-                    setTextColor(Color.WHITE)
-                    setPadding(dp(12), dp(4), 0, dp(4))
-                    setOnClickListener { showVersionMenu(it) }
-                })
-            })
-
-            addView(TextView(this@MainActivity).apply {
-                text = "目标：${BlockRules.targetPackage}  ·  命中域名返回 ${BlockRules.zeroAddress}"
-                textSize = 13f
-                setTextColor(Color.rgb(219, 245, 229))
-                setPadding(0, dp(6), 0, 0)
-                ellipsize = TextUtils.TruncateAt.END
-                maxLines = 2
-            })
+    fun refreshRecords() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val uri = BlockRecordProvider.CONTENT_URI.buildUpon()
+                .appendQueryParameter("limit", "500")
+                .build()
+            val cursor = getApplication<Application>().contentResolver.query(uri, null, null, null, null)
+            val newRecords = cursor.useRecords().deduplicateForDisplay()
+            _records.value = newRecords
         }
     }
 
-    private fun showVersionMenu(anchor: View) {
-        val popup = PopupMenu(this, anchor, Gravity.END)
-        val currentVersion = try {
-            packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
-        } catch (_: Exception) { "unknown" }
-        popup.menu.add("当前版本：$currentVersion").apply { isEnabled = false }
-        popup.menu.add("最新版本：${latestVersion ?: "检查中..."}").apply { isEnabled = false }
-        popup.menu.add("GitHub 发布页").apply {
-            setOnMenuItemClickListener {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(
-                    "https://github.com/kemi-20/fxxkad_dailyracing/releases")))
-                true
-            }
-        }
-        popup.show()
-
-        if (latestVersion == null) {
-            fetchLatestVersion()
+    fun clearRecords() {
+        viewModelScope.launch(Dispatchers.IO) {
+            getApplication<Application>().contentResolver.delete(BlockRecordProvider.CONTENT_URI, null, null)
+            refreshRecords()
         }
     }
 
-    private fun fetchLatestVersion() {
-        Thread {
+    fun fetchLatestVersion() {
+        if (_latestVersion.value != null && _latestVersion.value != "获取失败" && _latestVersion.value != "检查中...") return
+
+        _latestVersion.value = "检查中..."
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val url = URL("https://api.github.com/repos/kemi-20/fxxkad_dailyracing/releases/latest")
                 val conn = url.openConnection() as HttpURLConnection
@@ -164,115 +91,11 @@ class MainActivity : Activity() {
                 val json = conn.inputStream.bufferedReader().readText()
                 conn.disconnect()
                 val tag = JSONObject(json).getString("tag_name")
-                latestVersion = tag
+                _latestVersion.value = tag
             } catch (_: Exception) {
-                latestVersion = "获取失败"
-            }
-        }.start()
-    }
-
-    private fun buildStats(): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(12), 0, dp(6))
-        }
-        totalView = statCard(row, "总拦截", "0")
-        uniqueView = statCard(row, "域名数", "0")
-        rulesView = statCard(row, "规则", BlockRules.hosts.size.toString())
-        return row
-    }
-
-    private fun statCard(parent: LinearLayout, label: String, value: String): TextView {
-        val valueView: TextView
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = round(Color.WHITE, 14f)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            addView(TextView(this@MainActivity).apply {
-                text = label
-                textSize = 12f
-                setTextColor(COLOR_MUTED)
-            })
-            valueView = TextView(this@MainActivity).apply {
-                text = value
-                textSize = 24f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(COLOR_TEXT)
-                setPadding(0, dp(2), 0, 0)
-            }
-            addView(valueView)
-        }
-        parent.addView(card, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            rightMargin = dp(8)
-        })
-        return valueView
-    }
-
-    private fun buildActions(): View {
-        val wrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = round(Color.WHITE, 14f)
-            setPadding(dp(12), dp(10), dp(12), dp(12))
-        }
-
-        statusView = TextView(this).apply {
-            textSize = 13f
-            setTextColor(COLOR_MUTED)
-        }
-        wrap.addView(statusView)
-
-        val buttons = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(10), 0, 0)
-        }
-        buttons.addView(Button(this).apply {
-            text = "刷新"
-            setOnClickListener { refreshRecords() }
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        buttons.addView(Button(this).apply {
-            text = "清空"
-            setOnClickListener { clearRecords() }
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            leftMargin = dp(10)
-        })
-        wrap.addView(buttons)
-        return wrap
-    }
-
-    private fun refreshRecords() {
-        val uri = BlockRecordProvider.CONTENT_URI.buildUpon()
-            .appendQueryParameter("limit", "500")
-            .build()
-        val records = contentResolver.query(uri, null, null, null, null).useRecords()
-        val displayRecords = records.deduplicateForDisplay()
-        adapter.records = displayRecords
-        adapter.notifyDataSetChanged()
-
-        val uniqueHosts = records.map { it.host }.toSet().size
-        totalView.text = records.size.toString()
-        uniqueView.text = uniqueHosts.toString()
-        rulesView.text = BlockRules.hosts.size.toString()
-        emptyView.visibility = if (displayRecords.isEmpty()) View.VISIBLE else View.GONE
-        statusView.text = "运行状态：等待目标应用触发 DNS 查询。列表已合并 1 分钟内重复域名。最近刷新：${formatTime(System.currentTimeMillis())}"
-    }
-
-    private fun List<BlockRecord>.deduplicateForDisplay(): List<BlockRecord> {
-        val kept = mutableListOf<BlockRecord>()
-        for (record in sortedBy { it.time }) {
-            val hasRecentSameHost = kept.any {
-                it.host == record.host && record.time - it.time in 0 until DISPLAY_DEDUP_WINDOW_MS
-            }
-            if (!hasRecentSameHost) {
-                kept.add(record)
+                _latestVersion.value = "获取失败"
             }
         }
-        return kept.sortedByDescending { it.time }
-    }
-
-    private fun clearRecords() {
-        contentResolver.delete(BlockRecordProvider.CONTENT_URI, null, null)
-        Toast.makeText(this, "拦截记录已清空", Toast.LENGTH_SHORT).show()
-        refreshRecords()
     }
 
     private fun Cursor?.useRecords(): List<BlockRecord> {
@@ -299,91 +122,271 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun formatTime(time: Long): String {
-        return DateFormat.format("HH:mm:ss", time).toString()
+    private fun List<BlockRecord>.deduplicateForDisplay(): List<BlockRecord> {
+        val kept = mutableListOf<BlockRecord>()
+        for (record in sortedBy { it.time }) {
+            val hasRecentSameHost = kept.any {
+                it.host == record.host && record.time - it.time in 0 until DISPLAY_DEDUP_WINDOW_MS
+            }
+            if (!hasRecentSameHost) {
+                kept.add(record)
+            }
+        }
+        return kept.sortedByDescending { it.time }
     }
+}
 
-    private fun round(color: Int, radius: Float): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(radius.toInt()).toFloat()
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
+        setContent {
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    MainScreen()
+                }
+            }
         }
     }
+}
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainScreen(viewModel: MainViewModel = viewModel()) {
+    val records by viewModel.records.collectAsStateWithLifecycle()
+    val latestVersion by viewModel.latestVersion.collectAsStateWithLifecycle()
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
-    private data class BlockRecord(
-        val id: Long,
-        val time: Long,
-        val host: String,
-        val source: String,
-        val result: String
-    )
-
-    private inner class RecordAdapter : BaseAdapter() {
-        var records: List<BlockRecord> = emptyList()
-
-        override fun getCount(): Int = records.size
-        override fun getItem(position: Int): Any = records[position]
-        override fun getItemId(position: Int): Long = records[position].id
-
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-            val holder: RecordHolder
-            val view = if (convertView == null) {
-                val container = LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(dp(14), dp(10), dp(14), dp(10))
-                    background = round(Color.WHITE, 0f)
-                }
-                holder = RecordHolder(
-                    time = TextView(this@MainActivity).apply {
-                        textSize = 12f
-                        setTextColor(COLOR_MUTED)
-                    },
-                    host = TextView(this@MainActivity).apply {
-                        textSize = 16f
-                        typeface = Typeface.DEFAULT_BOLD
-                        setTextColor(COLOR_TEXT)
-                        setSingleLine(true)
-                        ellipsize = TextUtils.TruncateAt.MIDDLE
-                    },
-                    detail = TextView(this@MainActivity).apply {
-                        textSize = 12f
-                        setTextColor(COLOR_MUTED)
-                        setPadding(0, dp(4), 0, 0)
-                        setSingleLine(true)
-                        ellipsize = TextUtils.TruncateAt.END
-                    }
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            LargeTopAppBar(
+                title = { Text("每日赛车 DNS 拦截", fontWeight = FontWeight.Bold) },
+                actions = {
+                    VersionMenu(latestVersion, viewModel::fetchLatestVersion)
+                },
+                scrollBehavior = scrollBehavior
+            )
+        }
+    ) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(
+                top = innerPadding.calculateTopPadding() + 8.dp,
+                bottom = innerPadding.calculateBottomPadding() + 24.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item {
+                Text(
+                    text = "目标：${BlockRules.targetPackage}\n命中域名返回 ${BlockRules.zeroAddress}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
-                container.addView(holder.time)
-                container.addView(holder.host)
-                container.addView(holder.detail)
-                container.tag = holder
-                container
-            } else {
-                holder = convertView.tag as RecordHolder
-                convertView
             }
 
-            val record = records[position]
-            holder.time.text = formatTime(record.time)
-            holder.host.text = record.host
-            holder.detail.text = "已拦截 · ${record.result} · ${record.source}"
-            return view
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    StatCard("总拦截", records.size.toString(), Modifier.weight(1f))
+                    StatCard("域名数", records.distinctBy { it.host }.size.toString(), Modifier.weight(1f))
+                    StatCard("规则", BlockRules.hosts.size.toString(), Modifier.weight(1f))
+                }
+            }
+
+            item {
+                ActionsCard(
+                    onRefresh = viewModel::refreshRecords,
+                    onClear = viewModel::clearRecords
+                )
+            }
+
+            item {
+                Text(
+                    text = "拦截日志",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
+                )
+            }
+
+            if (records.isEmpty()) {
+                item {
+                    Text(
+                        text = "暂无拦截记录\n覆盖安装后请在 LSPosed 确认模块启用，并强停 ${BlockRules.targetPackage} 后重新打开",
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 48.dp, horizontal = 16.dp)
+                    )
+                }
+            } else {
+                items(records, key = { it.id }) { record ->
+                    RecordItem(record)
+                }
+            }
         }
     }
+}
 
-    private data class RecordHolder(
-        val time: TextView,
-        val host: TextView,
-        val detail: TextView
-    )
+@Composable
+fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
+    ElevatedCard(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+        ),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = value,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
 
-    companion object {
-        private val COLOR_BG = Color.rgb(242, 246, 249)
-        private val COLOR_TEXT = Color.rgb(23, 31, 42)
-        private val COLOR_MUTED = Color.rgb(96, 112, 128)
-        private val COLOR_GREEN_DARK = Color.rgb(22, 112, 76)
-        private const val DISPLAY_DEDUP_WINDOW_MS = 60_000L
+@Composable
+fun ActionsCard(onRefresh: () -> Unit, onClear: () -> Unit) {
+    val context = LocalContext.current
+    ElevatedCard(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            val time = remember { mutableStateOf(System.currentTimeMillis()) }
+            Text(
+                text = "运行状态：等待目标应用触发 DNS 查询。列表已合并 1 分钟内重复域名。最近刷新：${DateFormat.format("HH:mm:ss", time.value)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FilledTonalButton(
+                    onClick = {
+                        onRefresh()
+                        time.value = System.currentTimeMillis()
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("刷新")
+                }
+                Button(
+                    onClick = {
+                        onClear()
+                        Toast.makeText(context, "拦截记录已清空", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("清空")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RecordItem(record: BlockRecord) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = record.host,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = DateFormat.format("HH:mm:ss", record.time).toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "已拦截 · ${record.result} · ${record.source}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+fun VersionMenu(latestVersion: String?, onFetchVersion: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val currentVersion = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
+    } catch (_: Exception) { "unknown" }
+
+    Box {
+        IconButton(onClick = {
+            expanded = true
+            onFetchVersion()
+        }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("当前版本：$currentVersion") },
+                onClick = { },
+                enabled = false
+            )
+            DropdownMenuItem(
+                text = { Text("最新版本：${latestVersion ?: "检查中..."}") },
+                onClick = { },
+                enabled = false
+            )
+            Divider()
+            DropdownMenuItem(
+                text = { Text("GitHub 发布页") },
+                onClick = {
+                    expanded = false
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(
+                        "https://github.com/kemi-20/fxxkad_dailyracing/releases"
+                    )))
+                }
+            )
+        }
     }
 }
