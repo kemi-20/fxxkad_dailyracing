@@ -212,25 +212,45 @@ jobs:
       - name: Compress APK (max deflate)
         run: |
           python3 - <<'PY'
-          import zipfile, os, sys
+          import zipfile, os, subprocess, shutil, sys
 
-          apk_path = "build/racingdaily-npatched-metadata.apk"
-          tmp_path = apk_path + ".tmp"
+          apk = "build/racingdaily-npatched-metadata.apk"
+          tmp_dir = "build/apktemp"
 
-          orig_size = os.path.getsize(apk_path)
+          orig_size = os.path.getsize(apk)
           print(f"Before: {orig_size / 1024 / 1024:.1f} MB")
 
-          with zipfile.ZipFile(apk_path, 'r') as src:
-              with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as dst:
-                  for info in src.infolist():
-                      data = src.read(info.filename)
-                      if info.compress_type == zipfile.ZIP_STORED:
-                          dst.writestr(info, data, compress_type=zipfile.ZIP_STORED)
-                      else:
-                          dst.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+          # Get compress_type for each entry (infolist() does NOT read data, no zipbomb issue)
+          stored_entries = set()
+          with zipfile.ZipFile(apk, 'r') as z:
+              for info in z.infolist():
+                  if info.compress_type == zipfile.ZIP_STORED:
+                      stored_entries.add(info.filename)
 
-          new_size = os.path.getsize(tmp_path)
-          os.replace(tmp_path, apk_path)
+          # Extract with system unzip (handles nested APK entries without zipbomb checks)
+          os.makedirs(tmp_dir, exist_ok=True)
+          subprocess.run(["unzip", "-o", "-q", apk, "-d", tmp_dir], check=True)
+
+          # Repack with max deflate where applicable
+          tmp_apk = apk + ".tmp"
+          total_before = 0
+          total_after = 0
+          with zipfile.ZipFile(tmp_apk, 'w', zipfile.ZIP_DEFLATED) as zout:
+              for root, dirs, files in os.walk(tmp_dir):
+                  for f in files:
+                      path = os.path.join(root, f)
+                      arcname = os.path.relpath(path, tmp_dir).replace('\\', '/')
+                      with open(path, 'rb') as fp:
+                          data = fp.read()
+                      total_before += len(data)
+                      if arcname in stored_entries:
+                          zout.writestr(arcname, data, compress_type=zipfile.ZIP_STORED)
+                      else:
+                          zout.writestr(arcname, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+
+          new_size = os.path.getsize(tmp_apk)
+          os.replace(tmp_apk, apk)
+          shutil.rmtree(tmp_dir)
           print(f"After:  {new_size / 1024 / 1024:.1f} MB ({orig_size - new_size:,} bytes saved)")
           PY
 
