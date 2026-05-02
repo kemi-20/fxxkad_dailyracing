@@ -33,6 +33,7 @@ class HookEntry : IXposedHookLoadPackage {
         hookAndroidNameService(lpparam.packageName)
         hookShareIntent(lpparam.classLoader)
         hookWeChatSendReq(lpparam.classLoader)
+        hookTencentSDK(lpparam.classLoader)
     }
 
     private fun hookClassLoader(classLoader: ClassLoader) {
@@ -43,7 +44,10 @@ class HookEntry : IXposedHookLoadPackage {
                         val name = param.args.getOrNull(0) as? String ?: return
                         if (name.contains("tencent.mm") || name.contains("WXApi")
                             || name.contains("wechat") || name.contains("Wechat")
-                            || name.contains("WXMedia") || name.contains("WXWebpage")) {
+                            || name.contains("WXMedia") || name.contains("WXWebpage")
+                            || name.contains("com.tencent.connect")
+                            || name.contains("com.tencent.tauth")
+                            || name.contains("Tencent") && name.contains("openapi")) {
                             XposedBridge.log("[DailyRacingBlocker] CLASS: $name")
                         }
                     }
@@ -299,6 +303,29 @@ class HookEntry : IXposedHookLoadPackage {
     }
 
     private var crLogCount = 0
+
+    private fun hookTencentSDK(classLoader: ClassLoader) {
+        val tcClasses = listOf(
+            "com.tencent.tauth.Tencent",
+            "com.tencent.connect.common.BaseApi",
+            "com.tencent.connect.share.QQShare",
+            "com.tencent.connect.share.QzoneShare",
+        )
+        for (clsName in tcClasses) {
+            val cls = XposedHelpers.findClassIfExists(clsName, classLoader) ?: continue
+            val methods = try { cls.declaredMethods.map { it.name }.distinct() } catch (_: Throwable) { emptyList() }
+            for (m in methods) {
+                try {
+                    XposedBridge.hookAllMethods(cls, m, object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            XposedBridge.log("[DailyRacingBlocker] TC.${cls.simpleName}.${param.method.name}()")
+                        }
+                    })
+                } catch (_: Throwable) {}
+            }
+            XposedBridge.log("[DailyRacingBlocker] hooked ${cls.simpleName}: $methods")
+        }
+    }
 
     private fun hookWeChatSendReq(classLoader: ClassLoader) {
         // ---------- Path A: hook WeChat SDK's sendReq (impl classes only, not interfaces) ----------
