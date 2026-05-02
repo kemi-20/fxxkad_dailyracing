@@ -227,7 +227,7 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     StatCard("总拦截", viewModel.totalCount.collectAsStateWithLifecycle().value.toString(), Modifier.weight(1f))
                     StatCard("域名数", records.distinctBy { it.host }.size.toString(), Modifier.weight(1f))
-                    StatCard("规则", BlockRules.hosts.size.toString(), Modifier.weight(1f))
+                    StatCard("规则", BlockRules.domainCount.toString(), Modifier.weight(1f))
                 }
             }
 

@@ -94,6 +94,8 @@ object BlockRules {
         return domain.trim()
     }
 
+    val domainCount: Int get() = synchronized(hosts) { hosts.size }
+
     fun shouldBlock(host: String?): Boolean {
         val normalized = host?.trim()?.trimEnd('.')?.lowercase() ?: return false
         val list = synchronized(hosts) { hosts.toList() }
