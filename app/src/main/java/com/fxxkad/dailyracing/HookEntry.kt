@@ -27,11 +27,31 @@ class HookEntry : IXposedHookLoadPackage {
         if (lpparam.packageName != BlockRules.targetPackage) return
 
         XposedBridge.log("[DailyRacingBlocker] enabled for ${lpparam.packageName}")
+        hookClassLoader(lpparam.classLoader)
         hookApplicationAttach()
         hookInetAddress(lpparam.packageName)
         hookAndroidNameService(lpparam.packageName)
         hookShareIntent(lpparam.classLoader)
         hookWeChatSendReq(lpparam.classLoader)
+    }
+
+    private fun hookClassLoader(classLoader: ClassLoader) {
+        try {
+            XposedBridge.hookAllMethods(ClassLoader::class.java, "loadClass",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val name = param.args.getOrNull(0) as? String ?: return
+                        if (name.contains("tencent.mm") || name.contains("WXApi")
+                            || name.contains("wechat") || name.contains("Wechat")
+                            || name.contains("WXMedia") || name.contains("WXWebpage")) {
+                            XposedBridge.log("[DailyRacingBlocker] CLASS: $name")
+                        }
+                    }
+                })
+            XposedBridge.log("[DailyRacingBlocker] hooked ClassLoader.loadClass")
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] failed ClassLoader hook: ${t.message}")
+        }
     }
 
     private fun hookApplicationAttach() {
@@ -307,7 +327,7 @@ class HookEntry : IXposedHookLoadPackage {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 val uri = param.args.getOrNull(0) as? Uri ?: return
                 val auth = uri.authority ?: return
-                if (crLogCount < 30) {
+                if (crLogCount < 80) {
                     crLogCount++
                     XposedBridge.log("[DailyRacingBlocker] CR.${param.method.name} authority=$auth")
                 }
