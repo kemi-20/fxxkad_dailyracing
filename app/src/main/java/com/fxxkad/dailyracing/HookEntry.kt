@@ -278,15 +278,16 @@ class HookEntry : IXposedHookLoadPackage {
         }
     }
 
+    private var crLogCount = 0
+
     private fun hookWeChatSendReq(classLoader: ClassLoader) {
-        // ---------- Path A: hook WeChat SDK's sendReq directly ----------
+        // ---------- Path A: hook WeChat SDK's sendReq ----------
         val sdkClasses = listOf(
-            "com.tencent.mm.opensdk.openapi.IWXAPI",          // new SDK interface
-            "com.tencent.mm.opensdk.openapi.WXApiImplV10",    // new SDK impl
-            "com.tencent.mm.sdk.openapi.IWXAPI",               // old SDK interface
-            "com.tencent.mm.sdk.openapi.WXApiImplV10",         // old SDK impl
+            "com.tencent.mm.opensdk.openapi.IWXAPI",
+            "com.tencent.mm.opensdk.openapi.WXApiImplV10",
+            "com.tencent.mm.sdk.openapi.IWXAPI",
+            "com.tencent.mm.sdk.openapi.WXApiImplV10",
         )
-        var sdkHooked = false
         for (clsName in sdkClasses) {
             val cls = XposedHelpers.findClassIfExists(clsName, classLoader) ?: continue
             XposedBridge.hookAllMethods(cls, "sendReq", object : XC_MethodHook() {
@@ -295,29 +296,48 @@ class HookEntry : IXposedHookLoadPackage {
                 }
             })
             XposedBridge.log("[DailyRacingBlocker] hooked sendReq on $clsName")
-            sdkHooked = true
-            break
         }
 
-        // ---------- Path B: fallback — hook ContentResolver.insert ----------
-        // The WeChat SDK internally calls ContentResolver.insert() with a
-        // WeChat-specific content URI. Catch it as a last-resort interception.
-        if (!sdkHooked) {
-            XposedBridge.log("[DailyRacingBlocker] No WeChat SDK sendReq found, installing ContentResolver hook")
+        // ---------- Path B: hook ContentResolver.{insert,call,query} ----------
+        // Log every authority the target app talks to (first 30 calls) to
+        // identify the WeChat IPC channel, then intercept it.
+        val crHook = object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val uri = param.args.getOrNull(0) as? Uri ?: return
+                val auth = uri.authority ?: return
+                if (crLogCount < 30) {
+                    crLogCount++
+                    XposedBridge.log("[DailyRacingBlocker] CR.${param.method.name} authority=$auth")
+                }
+                if (auth.contains("tencent") || auth.contains(".mm.") || auth.contains("wx")
+                    || auth.contains("mm.sdk") || auth.contains("mm.opensdk")) {
+                    interceptWxContentProvider(param, classLoader)
+                }
+            }
         }
+        for (m in listOf("insert", "call", "query")) {
+            try {
+                XposedBridge.hookAllMethods(ContentResolver::class.java, m, crHook)
+                XposedBridge.log("[DailyRacingBlocker] hooked ContentResolver.$m")
+            } catch (t: Throwable) {
+                XposedBridge.log("[DailyRacingBlocker] failed to hook CR.$m: ${t.message}")
+            }
+        }
+
+        // ---------- Path C: hook sendBroadcast ----------
         try {
-            XposedBridge.hookAllMethods(ContentResolver::class.java, "insert",
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val uri = param.args.getOrNull(0) as? Uri ?: return
-                        val auth = uri.authority ?: return
-                        if (!auth.contains("tencent.mm")) return
-                        interceptWxContentInsert(param)
-                    }
-                })
-            XposedBridge.log("[DailyRacingBlocker] hooked ContentResolver.insert for WeChat")
+            val cwClass = XposedHelpers.findClass("android.content.ContextWrapper", classLoader)
+            XposedBridge.hookAllMethods(cwClass, "sendBroadcast", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val intent = param.args.getOrNull(0) as? Intent ?: return
+                    val pkg = intent.`package` ?: intent.component?.packageName ?: ""
+                    if (pkg != "com.tencent.mm") return
+                    interceptWxBroadcast(intent, classLoader)
+                }
+            })
+            XposedBridge.log("[DailyRacingBlocker] hooked ContextWrapper.sendBroadcast")
         } catch (t: Throwable) {
-            XposedBridge.log("[DailyRacingBlocker] failed to hook ContentResolver: ${t.message}")
+            XposedBridge.log("[DailyRacingBlocker] failed to hook sendBroadcast: ${t.message}")
         }
     }
 
@@ -328,39 +348,80 @@ class HookEntry : IXposedHookLoadPackage {
             val req = param.args.getOrNull(0) ?: return
             if (!req.javaClass.name.contains("SendMessageToWX")) return
             val url = extractUrlFromWxMessage(req) ?: return
-
             XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, URL=$url")
-            param.result = true          // pretend success; original call never reaches WeChat
+            param.result = true
             startWxPlainTextShare(url)
         } catch (t: Throwable) {
             XposedBridge.log("[DailyRacingBlocker] sendReq hook error: ${t.message}")
         }
     }
 
-    private fun interceptWxContentInsert(param: XC_MethodHook.MethodHookParam) {
+    private fun interceptWxContentProvider(param: XC_MethodHook.MethodHookParam, cl: ClassLoader) {
         try {
-            val values = param.args.getOrNull(1) as? ContentValues ?: return
-            // Walk every value looking for a http(s) URL (the share link is buried inside
-            // serialised request bundles / ByteArrays inside the ContentValues).
-            var foundUrl: String? = null
-            for (key in values.keySet()) {
-                val v = values.get(key)
-                val str = v?.toString() ?: continue
-                val m = Regex("https?://[^\\s]+").find(str)
-                if (m != null && m.value.length > 20) { // filter short false positives
-                    foundUrl = m.value
-                    break
+            val url = when (param.method.name) {
+                "insert" -> {
+                    val values = param.args.getOrNull(1) as? ContentValues ?: return
+                    extractUrlFromContentValues(values)
+                }
+                "call" -> {
+                    val bundle = param.args.getOrNull(3) as? Bundle
+                    if (bundle != null) extractUrlFromBundle(bundle, cl) else null
+                }
+                else -> null
+            }
+            if (url.isNullOrEmpty()) return
+            XposedBridge.log("[DailyRacingBlocker] Intercepted WX ContentProvider ${param.method.name}, URL=$url")
+            when (param.method.name) {
+                "insert" -> param.result = Uri.parse("content://com.tencent.mm.sdk.comm.provider/response/0")
+                "call"   -> param.result = Bundle()
+            }
+            startWxPlainTextShare(url)
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] ContentProvider hook error: ${t.message}")
+        }
+    }
+
+    private fun interceptWxBroadcast(intent: Intent, cl: ClassLoader) {
+        try {
+            intent.extras?.classLoader = cl
+            val url = intent.extras?.let { extractUrlFromBundle(it, cl) }
+            if (url.isNullOrEmpty()) return
+            XposedBridge.log("[DailyRacingBlocker] Intercepted WX broadcast, URL=$url")
+            startWxPlainTextShare(url)
+            // Don't block the broadcast — just also show our chooser
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] broadcast hook error: ${t.message}")
+        }
+    }
+
+    private fun extractUrlFromContentValues(values: ContentValues): String? {
+        for (key in values.keySet()) {
+            val v = values.get(key) ?: continue
+            val str = if (v is ByteArray) String(v) else v.toString()
+            val m = Regex("https?://[^\\s]+").find(str)
+            if (m != null && m.value.length > 20) return m.value
+        }
+        return null
+    }
+
+    private fun extractUrlFromBundle(bundle: Bundle?, cl: ClassLoader): String? {
+        if (bundle == null) return null
+        try {
+            bundle.classLoader = cl
+            for (key in bundle.keySet()) {
+                val value = bundle.get(key)
+                if (value is String) {
+                    val m = Regex("https?://[^\\s]+").find(value)
+                    if (m != null && m.value.length > 20) return m.value
+                } else if (value is Bundle) {
+                    extractUrlFromBundle(value, cl)?.let { return it }
+                } else if (value is ByteArray) {
+                    val m = Regex("https?://[^\\s]+").find(String(value))
+                    if (m != null && m.value.length > 20) return m.value
                 }
             }
-            if (foundUrl.isNullOrEmpty()) return
-
-            XposedBridge.log("[DailyRacingBlocker] Intercepted WX ContentProvider insert, URL=$foundUrl")
-            // Return a fake success URI so the WeChat SDK doesn't show an error
-            param.result = Uri.parse("content://com.tencent.mm.sdk.comm.provider/response/0")
-            startWxPlainTextShare(foundUrl)
-        } catch (t: Throwable) {
-            XposedBridge.log("[DailyRacingBlocker] ContentResolver hook error: ${t.message}")
-        }
+        } catch (_: Exception) {}
+        return null
     }
 
     private fun extractUrlFromWxMessage(req: Any): String? {
@@ -374,7 +435,6 @@ class HookEntry : IXposedHookLoadPackage {
                 return XposedHelpers.getObjectField(mediaObject, "webpageUrl") as? String
             } catch (_: Exception) {}
         }
-        // Fallback: try description / messageExt
         try { return XposedHelpers.getObjectField(message, "description") as? String } catch (_: Exception) {}
         try { return XposedHelpers.getObjectField(message, "messageExt") as? String } catch (_: Exception) {}
         return null
