@@ -28,7 +28,7 @@ class HookEntry : IXposedHookLoadPackage {
         hookApplicationAttach()
         hookInetAddress(lpparam.packageName)
         hookAndroidNameService(lpparam.packageName)
-        hookQQShareIntent(lpparam.classLoader)
+        hookShareIntent(lpparam.classLoader)
     }
 
     private fun hookApplicationAttach() {
@@ -93,7 +93,7 @@ class HookEntry : IXposedHookLoadPackage {
         }
     }
 
-    private fun hookQQShareIntent(classLoader: ClassLoader) {
+    private fun hookShareIntent(classLoader: ClassLoader) {
         try {
             XposedHelpers.findAndHookMethod(
                 "android.app.Instrumentation",
@@ -111,7 +111,6 @@ class HookEntry : IXposedHookLoadPackage {
                         try {
                             val intent = param.args[4] as? Intent ?: return
 
-                            // Check if this is a QQ share intent
                             val action = intent.action
                             val dataString = intent.dataString ?: ""
                             val componentName = intent.component?.className ?: ""
@@ -121,17 +120,21 @@ class HookEntry : IXposedHookLoadPackage {
                                           dataString.startsWith("mqqapi://share/") ||
                                           componentName.contains("com.tencent.connect.common.AssistActivity")
 
-                            if (!isQQShare) return
+                            val isWeChatShare = targetPackage == "com.tencent.mm" ||
+                                              componentName.startsWith("com.tencent.mm.") ||
+                                              action == "com.tencent.mm.action.SEND"
+
+                            if (!isQQShare && !isWeChatShare) return
 
                             // Check if the fix is enabled via the host app's ContentProvider
                             val context = resolveContext()
                             if (context != null) {
                                 try {
                                     val uri = android.net.Uri.parse("content://com.fxxkad.dailyracing.records/records")
-                                    val bundle = context.contentResolver.call(uri, "get_setting", "fix_qq", null)
+                                    val bundle = context.contentResolver.call(uri, "get_setting", "fix_share", null)
                                     val isEnabled = bundle?.getBoolean("value", true) ?: true
                                     if (!isEnabled) {
-                                        return // User disabled the QQ share fix
+                                        return // User disabled the share fix
                                     }
                                 } catch (_: Exception) {}
                             }
@@ -154,11 +157,12 @@ class HookEntry : IXposedHookLoadPackage {
                                     }
                                 }
                             }
-                            // Extract URL from Tencent Open SDK AssistActivity
+                            // Extract URL from Tencent Open SDK AssistActivity or WeChat intent
                             else if (intent.extras != null) {
                                 val bundle = intent.extras
                                 urlToShare = bundle?.getString("targetUrl") ?:
                                              bundle?.getString("url") ?:
+                                             bundle?.getString("_wxapi_sendauth_req_extData") ?:
                                              bundle?.getBundle("key_params")?.getString("targetUrl")
                             }
 
@@ -172,26 +176,33 @@ class HookEntry : IXposedHookLoadPackage {
                             }
 
                             if (!urlToShare.isNullOrEmpty()) {
-                                XposedBridge.log("[DailyRacingBlocker] Intercepted QQ rich share, converting to text: $urlToShare")
+                                val appName = if (isWeChatShare) "WeChat" else "QQ"
+                                XposedBridge.log("[DailyRacingBlocker] Intercepted $appName rich share, converting to text: $urlToShare")
 
                                 val plainTextIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
                                     putExtra(Intent.EXTRA_TEXT, urlToShare)
-                                    // Bypass the intermediate QQ chooser dialog and jump directly to friends list
-                                    component = ComponentName("com.tencent.mobileqq", "com.tencent.mobileqq.activity.JumpActivity")
+
+                                    if (isWeChatShare) {
+                                        // Target WeChat's "Share to Chat" screen directly
+                                        component = ComponentName("com.tencent.mm", "com.tencent.mm.ui.tools.ShareImgUI")
+                                    } else {
+                                        // Bypass the intermediate QQ chooser dialog and jump directly to friends list
+                                        component = ComponentName("com.tencent.mobileqq", "com.tencent.mobileqq.activity.JumpActivity")
+                                    }
                                 }
 
                                 param.args[4] = plainTextIntent
                             }
                         } catch (t: Throwable) {
-                            XposedBridge.log("[DailyRacingBlocker] Error in QQ share hook: ${t.message}")
+                            XposedBridge.log("[DailyRacingBlocker] Error in share hook: ${t.message}")
                         }
                     }
                 }
             )
-            XposedBridge.log("[DailyRacingBlocker] hooked Instrumentation.execStartActivity for QQ share")
+            XposedBridge.log("[DailyRacingBlocker] hooked Instrumentation.execStartActivity for share")
         } catch (t: Throwable) {
-            XposedBridge.log("[DailyRacingBlocker] failed to hook QQ share: ${t.message}")
+            XposedBridge.log("[DailyRacingBlocker] failed to hook share: ${t.message}")
         }
     }
 

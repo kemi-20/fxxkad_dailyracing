@@ -60,14 +60,14 @@ class BlockRecordProvider : ContentProvider() {
                 putLong("total_count", BlockRecordStore.getTotalCount(ctx))
             }
             "get_setting" -> Bundle().apply {
-                if (arg == "fix_qq") {
-                    putBoolean("value", BlockRecordStore.isFixQqEnabled(ctx))
+                if (arg == "fix_share" || arg == "fix_qq") {
+                    putBoolean("value", BlockRecordStore.isFixShareEnabled(ctx))
                 }
             }
             "set_setting" -> Bundle().apply {
-                if (arg == "fix_qq" && extras != null) {
+                if ((arg == "fix_share" || arg == "fix_qq") && extras != null) {
                     val enabled = extras.getBoolean("value", true)
-                    BlockRecordStore.setFixQqEnabled(ctx, enabled)
+                    BlockRecordStore.setFixShareEnabled(ctx, enabled)
                     putBoolean("success", true)
                 }
             }

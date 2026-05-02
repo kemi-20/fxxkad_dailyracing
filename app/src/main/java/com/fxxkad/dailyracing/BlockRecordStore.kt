@@ -18,7 +18,7 @@ object BlockRecordStore {
     private const val MAX_RECORDS = 1000
     private const val PREFS_NAME = "block_stats"
     const val PREF_TOTAL_COUNT = "total_count"
-    const val PREF_FIX_QQ = "fix_qq"
+    const val PREF_FIX_SHARE = "fix_share"
 
     fun getTotalCount(context: Context): Long {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -31,14 +31,20 @@ object BlockRecordStore {
         prefs.edit().putLong(PREF_TOTAL_COUNT, current + 1).apply()
     }
 
-    fun isFixQqEnabled(context: Context): Boolean {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getBoolean(PREF_FIX_QQ, true)
+    fun isFixShareEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.contains(PREF_FIX_SHARE)) {
+            return prefs.getBoolean(PREF_FIX_SHARE, true)
+        }
+        // Migration from fix_qq
+        val legacyValue = prefs.getBoolean("fix_qq", true)
+        prefs.edit().putBoolean(PREF_FIX_SHARE, legacyValue).remove("fix_qq").apply()
+        return legacyValue
     }
 
-    fun setFixQqEnabled(context: Context, enabled: Boolean) {
+    fun setFixShareEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putBoolean(PREF_FIX_QQ, enabled).apply()
+            .edit().putBoolean(PREF_FIX_SHARE, enabled).apply()
     }
 
     fun insert(context: Context, values: ContentValues): Long {

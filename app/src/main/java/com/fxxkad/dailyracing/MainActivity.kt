@@ -53,8 +53,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _totalCount = MutableStateFlow<Long>(0L)
     val totalCount = _totalCount.asStateFlow()
 
-    private val _fixQqEnabled = MutableStateFlow<Boolean>(true)
-    val fixQqEnabled = _fixQqEnabled.asStateFlow()
+    private val _fixShareEnabled = MutableStateFlow<Boolean>(true)
+    val fixShareEnabled = _fixShareEnabled.asStateFlow()
 
     private val _latestVersion = MutableStateFlow<String?>(null)
     val latestVersion = _latestVersion.asStateFlow()
@@ -70,18 +70,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val contentResolver = getApplication<Application>().contentResolver
             val uri = BlockRecordProvider.CONTENT_URI
-            val bundle = contentResolver.call(uri, "get_setting", "fix_qq", null)
-            _fixQqEnabled.value = bundle?.getBoolean("value", true) ?: true
+            val bundle = contentResolver.call(uri, "get_setting", "fix_share", null)
+            _fixShareEnabled.value = bundle?.getBoolean("value", true) ?: true
         }
     }
 
-    fun toggleFixQq(enabled: Boolean) {
-        _fixQqEnabled.value = enabled
+    fun toggleFixShare(enabled: Boolean) {
+        _fixShareEnabled.value = enabled
         viewModelScope.launch(Dispatchers.IO) {
             val contentResolver = getApplication<Application>().contentResolver
             val uri = BlockRecordProvider.CONTENT_URI
             val extras = Bundle().apply { putBoolean("value", enabled) }
-            contentResolver.call(uri, "set_setting", "fix_qq", extras)
+            contentResolver.call(uri, "set_setting", "fix_share", extras)
         }
     }
 
@@ -235,8 +235,8 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                 ActionsCard(
                     onRefresh = viewModel::refreshRecords,
                     onClear = viewModel::clearRecords,
-                    fixQqEnabled = viewModel.fixQqEnabled.collectAsStateWithLifecycle().value,
-                    onToggleFixQq = viewModel::toggleFixQq
+                    fixShareEnabled = viewModel.fixShareEnabled.collectAsStateWithLifecycle().value,
+                    onToggleFixShare = viewModel::toggleFixShare
                 )
             }
 
@@ -303,8 +303,8 @@ fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
 fun ActionsCard(
     onRefresh: () -> Unit,
     onClear: () -> Unit,
-    fixQqEnabled: Boolean,
-    onToggleFixQq: (Boolean) -> Unit
+    fixShareEnabled: Boolean,
+    onToggleFixShare: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     ElevatedCard(
@@ -321,15 +321,15 @@ fun ActionsCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("修复 QQ 分享", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("修复分享", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "拦截由于非官方重打包导致的富文本卡片分享失败，将其强制转换为纯文本链接分享。",
+                        "拦截由于非官方重打包导致的富文本卡片分享失败，将其强制转换为纯文本链接分享（支持 QQ 和微信）。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Spacer(modifier = Modifier.width(16.dp))
-                Switch(checked = fixQqEnabled, onCheckedChange = onToggleFixQq)
+                Switch(checked = fixShareEnabled, onCheckedChange = onToggleFixShare)
             }
 
             Divider(modifier = Modifier.padding(vertical = 16.dp))
