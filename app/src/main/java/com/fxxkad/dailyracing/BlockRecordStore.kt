@@ -44,7 +44,7 @@ object BlockRecordStore {
 
     fun setFixShareEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putBoolean(PREF_FIX_SHARE, enabled).apply()
+            .edit().putBoolean(PREF_FIX_SHARE, enabled).commit()
     }
 
     fun insert(context: Context, values: ContentValues): Long {

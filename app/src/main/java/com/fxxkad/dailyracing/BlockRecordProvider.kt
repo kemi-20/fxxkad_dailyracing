@@ -57,7 +57,9 @@ class BlockRecordProvider : ContentProvider() {
         val ctx = context ?: return null
         return when (method) {
             "get_stats" -> Bundle().apply {
+                BlockRules.loadRules(ctx)
                 putLong("total_count", BlockRecordStore.getTotalCount(ctx))
+                putInt("rule_count", BlockRules.domainCount)
             }
             "get_setting" -> Bundle().apply {
                 if (arg == "fix_share" || arg == "fix_qq") {
@@ -69,6 +71,7 @@ class BlockRecordProvider : ContentProvider() {
                     val enabled = extras.getBoolean("value", true)
                     BlockRecordStore.setFixShareEnabled(ctx, enabled)
                     putBoolean("success", true)
+                    putBoolean("value", enabled)
                 }
             }
             else -> super.call(method, arg, extras)

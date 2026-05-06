@@ -41,7 +41,7 @@ class HookEntry : IXposedHookLoadPackage {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     targetContext = (param.args.firstOrNull() as? Context)?.applicationContext
                     XposedBridge.log("[DailyRacingBlocker] context attached")
-                    BlockRules.loadRules()
+                    BlockRules.loadRules(targetContext)
                     flushPendingRecords()
                 }
             }
@@ -127,8 +127,7 @@ class HookEntry : IXposedHookLoadPackage {
                     intent.extras?.classLoader = classLoader
 
                     // Check if the fix is enabled
-                    val shareCtx = resolveContext()
-                    if (shareCtx != null && !isFixShareEnabled(shareCtx)) return
+                    if (!isFixShareEnabled()) return
 
                     var urlToShare: String? = null
 
@@ -255,8 +254,7 @@ class HookEntry : IXposedHookLoadPackage {
             val url = extractUrlFromWxReq(req) ?: return
 
             // Respect the "fix share" toggle
-            val ctx = resolveContext()
-            if (ctx != null && !isFixShareEnabled(ctx)) return
+            if (!isFixShareEnabled()) return
 
             XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, URL=$url")
             param.result = true
@@ -297,13 +295,28 @@ class HookEntry : IXposedHookLoadPackage {
         ctx.startActivity(chooser)
     }
 
-    private fun isFixShareEnabled(context: Context): Boolean {
+    private fun isFixShareEnabled(): Boolean {
+        val context = resolveContext() ?: return true
         return try {
-            val mc = context.createPackageContext("com.fxxkad.dailyracing",
-                Context.CONTEXT_IGNORE_SECURITY)
-            mc.getSharedPreferences("block_stats", Context.MODE_PRIVATE)
-                .getBoolean("fix_share", true)
-        } catch (_: Exception) { true }
+            val bundle = context.contentResolver.call(
+                BlockRecordProvider.CONTENT_URI,
+                "get_setting",
+                "fix_share",
+                null
+            )
+            bundle?.getBoolean("value", true) ?: true
+        } catch (_: Exception) {
+            try {
+                val mc = context.createPackageContext(
+                    "com.fxxkad.dailyracing",
+                    Context.CONTEXT_IGNORE_SECURITY
+                )
+                mc.getSharedPreferences("block_stats", Context.MODE_PRIVATE)
+                    .getBoolean("fix_share", true)
+            } catch (_: Exception) {
+                true
+            }
+        }
     }
 
     // ---------- Helpers ----------
@@ -383,6 +396,7 @@ class HookEntry : IXposedHookLoadPackage {
             val app = activityThread.getMethod("currentApplication").invoke(null) as? Application
             app?.applicationContext?.also {
                 targetContext = it
+                BlockRules.loadRules(it)
                 flushPendingRecords()
             }
         } catch (t: Throwable) {

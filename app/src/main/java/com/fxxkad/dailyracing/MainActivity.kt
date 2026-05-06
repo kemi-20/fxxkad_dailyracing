@@ -53,6 +53,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _totalCount = MutableStateFlow<Long>(0L)
     val totalCount = _totalCount.asStateFlow()
 
+    private val _ruleCount = MutableStateFlow(0)
+    val ruleCount = _ruleCount.asStateFlow()
+
     private val _fixShareEnabled = MutableStateFlow<Boolean>(true)
     val fixShareEnabled = _fixShareEnabled.asStateFlow()
 
@@ -95,11 +98,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Query total count via call()
             val statsBundle = contentResolver.call(BlockRecordProvider.CONTENT_URI, "get_stats", null, null)
             val count = statsBundle?.getLong("total_count", 0L) ?: 0L
+            val ruleCount = statsBundle?.getInt("rule_count", 0) ?: 0
 
             val cursor = contentResolver.query(uri, null, null, null, null)
             val newRecords = cursor.useRecords().deduplicateForDisplay()
 
             _totalCount.value = maxOf(count, newRecords.size.toLong())
+            _ruleCount.value = ruleCount
             _records.value = newRecords
         }
     }
@@ -189,6 +194,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(viewModel: MainViewModel = viewModel()) {
     val records by viewModel.records.collectAsStateWithLifecycle()
+    val ruleCount by viewModel.ruleCount.collectAsStateWithLifecycle()
     val latestVersion by viewModel.latestVersion.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -227,7 +233,7 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     StatCard("总拦截", viewModel.totalCount.collectAsStateWithLifecycle().value.toString(), Modifier.weight(1f))
                     StatCard("域名数", records.distinctBy { it.host }.size.toString(), Modifier.weight(1f))
-                    StatCard("规则", BlockRules.domainCount.toString(), Modifier.weight(1f))
+                    StatCard("规则", ruleCount.toString(), Modifier.weight(1f))
                 }
             }
 

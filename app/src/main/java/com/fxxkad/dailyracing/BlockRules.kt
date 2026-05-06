@@ -1,63 +1,68 @@
 package com.fxxkad.dailyracing
 
+import android.content.Context
 import de.robv.android.xposed.XposedBridge
 import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
 import java.util.Collections
-import java.util.zip.ZipFile
 
 object BlockRules {
     const val targetPackage = "com.romielf.mrsc"
     const val zeroAddress = "0.0.0.0"
 
+    private const val MODULE_PACKAGE = "com.fxxkad.dailyracing"
     private const val EXTERNAL_RULES_DIR = "/sdcard/DailyRacingBlocker/rules"
 
     private val hosts: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
 
-    /** Load all rule files. Call once after module initialisation. */
-    fun loadRules() {
+    @Volatile
+    private var loaded = false
+
+    fun loadRules(context: Context? = null, force: Boolean = false) {
+        if (loaded && !force) return
+
         val newHosts = mutableSetOf<String>()
-
-        // 1. Built-in rules — read directly from the module APK zip
-        try {
-            val apkPath = BlockRules::class.java.protectionDomain
-                .codeSource.location.path
-            ZipFile(apkPath).use { zip ->
-                val entries = zip.entries()
-                while (entries.hasMoreElements()) {
-                    val entry = entries.nextElement()
-                    val name = entry.name
-                    if (name.startsWith("assets/rules/") && name.endsWith(".txt")) {
-                        val fileName = name.removePrefix("assets/rules/")
-                        zip.getInputStream(entry).use { stream ->
-                            parseRules(stream.reader().buffered()) { newHosts.add(it) }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            XposedBridge.log("[DailyRacingBlocker] failed to load built-in rules: ${e.message}")
-        }
-
-        // 2. External rules from /sdcard/DailyRacingBlocker/rules/*.txt
-        try {
-            val extDir = File(EXTERNAL_RULES_DIR)
-            if (extDir.isDirectory) {
-                for (file in extDir.listFiles() ?: emptyArray()) {
-                    if (!file.name.endsWith(".txt")) continue
-                    file.bufferedReader().use { reader ->
-                        parseRules(reader, file.name) { newHosts.add(it) }
-                    }
-                }
-            }
-        } catch (_: Exception) {}
+        loadBuiltInRules(context, newHosts)
+        loadExternalRules(newHosts)
 
         synchronized(hosts) {
             hosts.clear()
             hosts.addAll(newHosts)
         }
+        loaded = true
         XposedBridge.log("[DailyRacingBlocker] loaded ${hosts.size} domain rules")
+    }
+
+    private fun loadBuiltInRules(context: Context?, output: MutableSet<String>) {
+        try {
+            val moduleContext = context?.createPackageContext(
+                MODULE_PACKAGE,
+                Context.CONTEXT_IGNORE_SECURITY
+            ) ?: context
+            val assets = moduleContext?.assets ?: return
+            for (fileName in assets.list("rules").orEmpty()) {
+                if (!fileName.endsWith(".txt")) continue
+                assets.open("rules/$fileName").bufferedReader().use { reader ->
+                    parseRules(reader) { output.add(it) }
+                }
+            }
+        } catch (e: Exception) {
+            XposedBridge.log("[DailyRacingBlocker] failed to load built-in rules: ${e.message}")
+        }
+    }
+
+    private fun loadExternalRules(output: MutableSet<String>) {
+        try {
+            val extDir = File(EXTERNAL_RULES_DIR)
+            if (extDir.isDirectory) {
+                for (file in extDir.listFiles().orEmpty()) {
+                    if (!file.name.endsWith(".txt")) continue
+                    file.bufferedReader().use { reader -> parseRules(reader) { output.add(it) } }
+                }
+            }
+        } catch (e: Exception) {
+            XposedBridge.log("[DailyRacingBlocker] failed to load external rules: ${e.message}")
+        }
     }
 
     private fun parseRules(reader: BufferedReader, onDomain: (String) -> Unit) {
