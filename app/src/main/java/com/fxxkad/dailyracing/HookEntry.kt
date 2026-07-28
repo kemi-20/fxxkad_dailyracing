@@ -146,19 +146,15 @@ class HookEntry : IXposedHookLoadPackage {
                     if (!isFixShareEnabled()) return
 
                     var urlToShare: String? = null
+                    var titleToShare: String? = null
 
                     if (action == Intent.ACTION_SEND) {
                         urlToShare = intent.getStringExtra(Intent.EXTRA_TEXT)
+                        titleToShare = intent.getStringExtra(Intent.EXTRA_SUBJECT)
                     } else if (dataString.startsWith("mqqapi://share/")) {
                         val uri = intent.data ?: return
-                        val encodedUrl = uri.getQueryParameter("url")
-                        if (!encodedUrl.isNullOrEmpty()) {
-                            try {
-                                urlToShare = String(Base64.decode(encodedUrl, Base64.DEFAULT))
-                            } catch (_: Exception) {
-                                urlToShare = encodedUrl
-                            }
-                        }
+                        urlToShare = decodeMaybeBase64(uri.getQueryParameter("url"))
+                        titleToShare = decodeMaybeBase64(uri.getQueryParameter("title"))
                     } else if (intent.extras != null) {
                         urlToShare = findUrlInBundle(intent.extras, classLoader)
                     }
@@ -171,11 +167,12 @@ class HookEntry : IXposedHookLoadPackage {
 
                     if (!urlToShare.isNullOrEmpty()) {
                         val appName = if (isWeChatShare) "WeChat" else "QQ"
-                        XposedBridge.log("[DailyRacingBlocker] Intercepted $appName rich share, converting to text: $urlToShare")
+                        val shareText = buildShareText(titleToShare, urlToShare)
+                        XposedBridge.log("[DailyRacingBlocker] Intercepted $appName rich share, converting to text: $shareText")
 
                         val plainTextIntent = Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, urlToShare)
+                            putExtra(Intent.EXTRA_TEXT, shareText)
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK
                         }
 
@@ -268,13 +265,15 @@ class HookEntry : IXposedHookLoadPackage {
             val req = param.args.getOrNull(0) ?: return
             if (!req.javaClass.name.contains("SendMessageToWX")) return
             val url = extractUrlFromWxReq(req) ?: return
+            val title = extractTitleFromWxReq(req)
 
             // Respect the "fix share" toggle
             if (!isFixShareEnabled()) return
 
-            XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, URL=$url")
+            val shareText = buildShareText(title, url)
+            XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, text=$shareText")
             param.result = true
-            startWxPlainTextShare(url)
+            startWxPlainTextShare(shareText)
         } catch (t: Throwable) {
             XposedBridge.log("[DailyRacingBlocker] sendReq hook error: ${t.message}")
         }
@@ -296,11 +295,20 @@ class HookEntry : IXposedHookLoadPackage {
         return null
     }
 
-    private fun startWxPlainTextShare(url: String) {
+    private fun extractTitleFromWxReq(req: Any): String? {
+        val message = XposedHelpers.getObjectField(req, "message") ?: return null
+        return try {
+            XposedHelpers.getObjectField(message, "title") as? String
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun startWxPlainTextShare(text: String) {
         val ctx = resolveContext() ?: return
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, url)
+            putExtra(Intent.EXTRA_TEXT, text)
             // Explicit component so the chooser has only one entry; the system
             // may skip the dialog on single-match. Route through chooser to keep
             // the system as the caller (bypasses WeChat caller-signature check).
@@ -336,6 +344,26 @@ class HookEntry : IXposedHookLoadPackage {
     }
 
     // ---------- Helpers ----------
+
+    /** Combines the article title and URL as "title\nurl"; falls back to the URL alone. */
+    private fun buildShareText(title: String?, url: String): String {
+        val trimmedTitle = title?.trim()
+        return if (!trimmedTitle.isNullOrEmpty() && trimmedTitle != url) {
+            "$trimmedTitle\n$url"
+        } else {
+            url
+        }
+    }
+
+    /** Decodes a possibly Base64-encoded query value, returning the raw value on failure. */
+    private fun decodeMaybeBase64(value: String?): String? {
+        if (value.isNullOrEmpty()) return null
+        return try {
+            String(Base64.decode(value, Base64.DEFAULT))
+        } catch (_: Exception) {
+            value
+        }
+    }
 
     @Suppress("DEPRECATION")
     private fun findUrlInBundle(bundle: Bundle?, classLoader: ClassLoader): String? {
