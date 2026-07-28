@@ -219,16 +219,27 @@ jobs:
           echo "Using NPatch output directly"
           cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
 
-      - name: Verify NPatch signature and prepare final APK
+      - name: Re-sign NPatch output with release keystore
         env:
           BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOLS_VERSION }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p build/final
-          # NPatch already V2-signs the APK when -k is provided (apkzlib SigningExtension).
-          # Running apksigner again on NPatch's zip-linked output produces thousands of
-          # "header mismatch" warnings. Just copy and verify the existing signature.
-          cp build/racingdaily-npatched-raw.apk build/final/racingdaily-npatched.apk
+          # NPatch v1.0.5 hardcodes BKS keystore, incompatible with our PKCS12.
+          # Let NPatch sign with its built-in keystore, then re-sign with apksigner
+          # using our release keystore so the final APK keeps the same signature as
+          # previous releases.
+          cp build/racingdaily-npatched-raw.apk build/final/racingdaily-npatched-aligned.apk
+          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" sign \
+            --ks build/signing/release.keystore \
+            --ks-key-alias "${KEY_ALIAS}" \
+            --ks-pass "pass:${KEYSTORE_PASSWORD}" \
+            --key-pass "pass:${KEY_PASSWORD}" \
+            --out build/final/racingdaily-npatched.apk \
+            build/final/racingdaily-npatched-aligned.apk
           "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose build/final/racingdaily-npatched.apk
 
       - name: Verify final metadata
