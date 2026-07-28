@@ -105,17 +105,43 @@ jobs:
           echo "security.provider.${NEXT_PROVIDER}=org.bouncycastle.jce.provider.BouncyCastleProvider" >> "${JAVA_SECURITY}"
           echo "Registered BouncyCastle as provider ${NEXT_PROVIDER}"
 
+      - name: Convert PKCS12 keystore to BKS for NPatch
+        env:
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # NPatch v1.0.5+ hardcodes KeyStore.getInstance("BKS").
+          # Our release keystore is PKCS12, so convert it to BKS using
+          # BouncyCastle (bundled in the NPatch jar, already registered as a
+          # JCE provider in the previous step).
+          keytool -importkeystore \
+            -srckeystore build/signing/release.keystore -srcstoretype PKCS12 \
+            -srcstorepass "${KEYSTORE_PASSWORD}" -srcalias "${KEY_ALIAS}" -srckeypass "${KEY_PASSWORD}" \
+            -destkeystore build/signing/release-bks.keystore -deststoretype BKS \
+            -deststorepass "${KEYSTORE_PASSWORD}" -destalias "${KEY_ALIAS}" -destkeypass "${KEY_PASSWORD}" \
+            -providerclass org.bouncycastle.jce.provider.BouncyCastleProvider \
+            -providerpath tools/npatch.jar
+          echo "BKS keystore created"
+
       - name: Inject module with NPatch integrated mode
+        env:
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p build/npatch-output
-          # v1.0.5+ hardcodes BKS keystore; our keystore is PKCS12.
-          # Let NPatch use its built-in keystore, then re-sign with apksigner
-          # in the strip step below.
+          # NPatch v1.0.5+ hardcodes BKS keystore; pass our converted BKS
+          # keystore via -k so NPatch signs directly with the release key.
+          # This avoids a post-hoc apksigner re-sign which would duplicate
+          # NPatch's nested ZIP-linked entries and double the APK size.
           java -jar tools/npatch.jar \
             "${ORIGINAL_APK}" \
             -m build/module/xposed-module-signed.apk \
             -o build/npatch-output \
+            -k build/signing/release-bks.keystore "${KEYSTORE_PASSWORD}" "${KEY_ALIAS}" "${KEY_PASSWORD}" \
             -l 2 \
             -v
           PATCHED_APK="$(find build/npatch-output -type f -name "*.apk" | head -n 1)"
@@ -219,27 +245,15 @@ jobs:
           echo "Using NPatch output directly"
           cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
 
-      - name: Re-sign NPatch output with release keystore
+      - name: Verify NPatch signature and prepare final APK
         env:
           BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOLS_VERSION }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p build/final
-          # NPatch v1.0.5 hardcodes BKS keystore, incompatible with our PKCS12.
-          # Let NPatch sign with its built-in keystore, then re-sign with apksigner
-          # using our release keystore so the final APK keeps the same signature as
-          # previous releases.
-          cp build/racingdaily-npatched-raw.apk build/final/racingdaily-npatched-aligned.apk
-          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" sign \
-            --ks build/signing/release.keystore \
-            --ks-key-alias "${KEY_ALIAS}" \
-            --ks-pass "pass:${KEYSTORE_PASSWORD}" \
-            --key-pass "pass:${KEY_PASSWORD}" \
-            --out build/final/racingdaily-npatched.apk \
-            build/final/racingdaily-npatched-aligned.apk
+          # NPatch signs directly with our release keystore via -k, so the
+          # output already has the correct signature. Just copy and verify.
+          cp build/racingdaily-npatched-raw.apk build/final/racingdaily-npatched.apk
           "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose build/final/racingdaily-npatched.apk
 
       - name: Verify final metadata
