@@ -153,10 +153,8 @@ class HookEntry : IXposedHookLoadPackage {
                         titleToShare = intent.getStringExtra(Intent.EXTRA_SUBJECT)
                     } else if (dataString.startsWith("mqqapi://share/")) {
                         val uri = intent.data ?: return
-                        // Only the url is Base64-encoded; the title is plain (percent-decoded
-                        // by getQueryParameter), so decoding it would produce garbled text.
                         urlToShare = decodeMaybeBase64(uri.getQueryParameter("url"))
-                        titleToShare = uri.getQueryParameter("title")
+                        titleToShare = decodeShareTitle(uri.getQueryParameter("title"))
                     } else if (intent.extras != null) {
                         urlToShare = findUrlInBundle(intent.extras, classLoader)
                     }
@@ -364,6 +362,24 @@ class HookEntry : IXposedHookLoadPackage {
             String(Base64.decode(value, Base64.DEFAULT))
         } catch (_: Exception) {
             value
+        }
+    }
+
+    /**
+     * Decodes the Base64-encoded QQ share title. getQueryParameter turns '+' into a
+     * space per URL query rules, which corrupts Base64, so restore it before decoding;
+     * then interpret the bytes as UTF-8, falling back to GBK when they are not valid
+     * UTF-8 (some payloads are GBK-encoded and would otherwise show as mojibake).
+     */
+    private fun decodeShareTitle(rawTitle: String?): String? {
+        if (rawTitle.isNullOrEmpty()) return null
+        val candidate = rawTitle.replace(' ', '+')
+        return try {
+            val bytes = Base64.decode(candidate, Base64.DEFAULT)
+            val utf8 = String(bytes, Charsets.UTF_8)
+            if (utf8.contains('\uFFFD')) String(bytes, charset("GBK")) else utf8
+        } catch (_: Exception) {
+            rawTitle
         }
     }
 
