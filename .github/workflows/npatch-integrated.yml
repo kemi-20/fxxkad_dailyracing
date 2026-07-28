@@ -54,23 +54,6 @@ jobs:
           test -f "${ORIGINAL_APK}"
           ls -lh "${ORIGINAL_APK}"
 
-
-      - name: Strip baseline profile from original APK
-        run: |
-          # NPatch addNestedZip+addFileLink creates overlapping ZIP entries
-          # where assets/npatch/origin.apk overlaps with assets/dexopt/baseline.prof.
-          # On process restart (multitask switch), Android detects the overlap
-          # and crashes with IOException. Strip baseline.prof/baseline.profm to
-          # eliminate the overlap. NPatch disableProfile() already handles this
-          # at runtime, so these files are redundant.
-          mkdir -p build
-          cp "${ORIGINAL_APK}" build/origin-stripped.apk
-          zip -d build/origin-stripped.apk \
-            "assets/dexopt/baseline.prof" \
-            "assets/dexopt/baseline.profm" || true
-          echo "Stripped APK ready: build/origin-stripped.apk"
-          unzip -l build/origin-stripped.apk | grep -c "dexopt/baseline" || echo "baseline.prof stripped (0 remaining)"
-
       - name: Build Xposed module
         run: gradle assembleRelease --stacktrace
 
@@ -120,7 +103,7 @@ jobs:
           set -euo pipefail
           mkdir -p build/npatch-output
           java -jar tools/npatch.jar \
-            "build/origin-stripped.apk" \
+            "${ORIGINAL_APK}" \
             -m build/module/xposed-module-signed.apk \
             -o build/npatch-output \
             -l 2 \
@@ -139,6 +122,29 @@ jobs:
                   sys.exit(1)
           print(f'NPatch output OK ({len(names)} entries, AndroidManifest.xml present)')
           "
+
+      - name: Strip baseline profile from patched APK
+        env:
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          # NPatch addNestedZip+addFileLink creates overlapping ZIP entries where
+          # assets/npatch/origin.apk overlaps with assets/dexopt/baseline.prof.
+          # On process restart (multitask switch), Android detects the overlap
+          # and crashes. Strip these entries and re-sign.
+          zip -d build/racingdaily-npatched-raw.apk \
+            "assets/dexopt/baseline.prof" \
+            "assets/dexopt/baseline.profm" || true
+          echo "Stripped baseline.prof from patched APK"
+          # Re-sign V2 (zip -d broke the existing signature)
+          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" sign \
+            --ks build/signing/release.keystore \
+            --ks-key-alias "${KEY_ALIAS}" \
+            --ks-pass "pass:${KEYSTORE_PASSWORD}" \
+            --key-pass "pass:${KEY_PASSWORD}" \
+            build/racingdaily-npatched-raw.apk
+          echo "Re-signed patched APK"
 
       - name: Preserve original version and Android SDK metadata
         env:
@@ -159,7 +165,7 @@ jobs:
           }
 
           # Read original APK metadata for logging and potential use
-          read_meta_from_aapt2 "build/origin-stripped.apk" > build/original.meta || true
+          read_meta_from_aapt2 "${ORIGINAL_APK}" > build/original.meta || true
           echo "Original APK metadata:"
           cat build/original.meta
 
@@ -254,7 +260,7 @@ jobs:
             printf "%s\n%s\n%s\n" "${package_meta}" "${min_sdk}" "${target_sdk}"
           }
 
-          read_meta "build/origin-stripped.apk" > build/original-final.meta
+          read_meta "${ORIGINAL_APK}" > build/original-final.meta
           if read_meta build/final/racingdaily-npatched.apk > build/patched-final.meta 2>/dev/null; then
             if cmp -s build/original-final.meta build/patched-final.meta; then
               echo "Final metadata verification passed"
