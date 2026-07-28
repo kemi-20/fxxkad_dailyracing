@@ -94,6 +94,17 @@ jobs:
             -o tools/apktool.jar \
             "https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar"
 
+      - name: Register BouncyCastle provider for BKS keystore
+        run: |
+          # NPatch v1.0.5+ hardcodes KeyStore.getInstance("BKS") even for its
+          # built-in keystore. The JDK ships no BKS provider, but the NPatch jar
+          # bundles BouncyCastle. Register it dynamically.
+          JAVA_SECURITY="${JAVA_HOME}/conf/security/java.security"
+          MAX_PROVIDER=$(grep -oE '^security\.provider\.[0-9]+=' "${JAVA_SECURITY}" | grep -oE '[0-9]+' | sort -n | tail -1)
+          NEXT_PROVIDER=$((MAX_PROVIDER + 1))
+          echo "security.provider.${NEXT_PROVIDER}=org.bouncycastle.jce.provider.BouncyCastleProvider" >> "${JAVA_SECURITY}"
+          echo "Registered BouncyCastle as provider ${NEXT_PROVIDER}"
+
       - name: Inject module with NPatch integrated mode
         run: |
           set -euo pipefail
@@ -121,28 +132,6 @@ jobs:
           print(f'NPatch output OK ({len(names)} entries, AndroidManifest.xml present)')
           "
 
-      - name: Strip baseline profile from patched APK
-        env:
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          # NPatch addNestedZip+addFileLink creates overlapping ZIP entries where
-          # assets/npatch/origin.apk overlaps with assets/dexopt/baseline.prof.
-          # On process restart (multitask switch), Android detects the overlap
-          # and crashes. Strip these entries and re-sign.
-          zip -d build/racingdaily-npatched-raw.apk \
-            "assets/dexopt/baseline.prof" \
-            "assets/dexopt/baseline.profm" || true
-          echo "Stripped baseline.prof from patched APK"
-          # Re-sign V2 (zip -d broke the existing signature)
-          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" sign \
-            --ks build/signing/release.keystore \
-            --ks-key-alias "${KEY_ALIAS}" \
-            --ks-pass "pass:${KEYSTORE_PASSWORD}" \
-            --key-pass "pass:${KEY_PASSWORD}" \
-            build/racingdaily-npatched-raw.apk
-          echo "Re-signed patched APK"
 
       - name: Preserve original version and Android SDK metadata
         env:
@@ -239,7 +228,7 @@ jobs:
           # NPatch already V2-signs the APK when -k is provided (apkzlib SigningExtension).
           # Running apksigner again on NPatch's zip-linked output produces thousands of
           # "header mismatch" warnings. Just copy and verify the existing signature.
-          cp build/racingdaily-npatched-metadata.apk build/final/racingdaily-npatched.apk
+          cp build/racingdaily-npatched-raw.apk build/final/racingdaily-npatched.apk
           "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose build/final/racingdaily-npatched.apk
 
       - name: Verify final metadata
