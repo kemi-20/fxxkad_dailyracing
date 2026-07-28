@@ -153,8 +153,10 @@ class HookEntry : IXposedHookLoadPackage {
                         titleToShare = intent.getStringExtra(Intent.EXTRA_SUBJECT)
                     } else if (dataString.startsWith("mqqapi://share/")) {
                         val uri = intent.data ?: return
+                        // Only the url is Base64-encoded; the title is plain (percent-decoded
+                        // by getQueryParameter), so decoding it would produce garbled text.
                         urlToShare = decodeMaybeBase64(uri.getQueryParameter("url"))
-                        titleToShare = decodeMaybeBase64(uri.getQueryParameter("title"))
+                        titleToShare = uri.getQueryParameter("title")
                     } else if (intent.extras != null) {
                         urlToShare = findUrlInBundle(intent.extras, classLoader)
                     }
