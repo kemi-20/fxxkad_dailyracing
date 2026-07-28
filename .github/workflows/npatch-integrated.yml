@@ -15,8 +15,8 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   BUILD_TOOLS_VERSION: "36.0.0"
-  NPATCH_VERSION: "v1.0.2"
-  NPATCH_JAR_NAME: "jar-v1.0.2-586-release.jar"
+  NPATCH_VERSION: "v1.0.5"
+  NPATCH_JAR_NAME: "jar-v1.0.5-639-release.jar"
   ORIGINAL_APK: "origin/racingdaily.apk"
 
 jobs:
@@ -95,19 +95,17 @@ jobs:
             "https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar"
 
       - name: Inject module with NPatch integrated mode
-        env:
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p build/npatch-output
+          # v1.0.5+ hardcodes BKS keystore; our keystore is PKCS12.
+          # Let NPatch use its built-in keystore, then re-sign with apksigner
+          # in the strip step below.
           java -jar tools/npatch.jar \
             "${ORIGINAL_APK}" \
             -m build/module/xposed-module-signed.apk \
             -o build/npatch-output \
             -l 2 \
-            -k build/signing/release.keystore "${KEYSTORE_PASSWORD}" "${KEY_ALIAS}" "${KEY_PASSWORD}" \
             -v
           PATCHED_APK="$(find build/npatch-output -type f -name "*.apk" | head -n 1)"
           test -n "${PATCHED_APK}"
