@@ -63,6 +63,7 @@ jobs:
           # and crashes with IOException. Strip baseline.prof/baseline.profm to
           # eliminate the overlap. NPatch disableProfile() already handles this
           # at runtime, so these files are redundant.
+          mkdir -p build
           cp "${ORIGINAL_APK}" build/origin-stripped.apk
           zip -d build/origin-stripped.apk \
             "assets/dexopt/baseline.prof" \
