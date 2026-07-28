@@ -54,6 +54,22 @@ jobs:
           test -f "${ORIGINAL_APK}"
           ls -lh "${ORIGINAL_APK}"
 
+
+      - name: Strip baseline profile from original APK
+        run: |
+          # NPatch addNestedZip+addFileLink creates overlapping ZIP entries
+          # where assets/npatch/origin.apk overlaps with assets/dexopt/baseline.prof.
+          # On process restart (multitask switch), Android detects the overlap
+          # and crashes with IOException. Strip baseline.prof/baseline.profm to
+          # eliminate the overlap. NPatch disableProfile() already handles this
+          # at runtime, so these files are redundant.
+          cp "${ORIGINAL_APK}" build/origin-stripped.apk
+          zip -d build/origin-stripped.apk \
+            "assets/dexopt/baseline.prof" \
+            "assets/dexopt/baseline.profm" || true
+          echo "Stripped APK ready: build/origin-stripped.apk"
+          unzip -l build/origin-stripped.apk | grep -c "dexopt/baseline" || echo "baseline.prof stripped (0 remaining)"
+
       - name: Build Xposed module
         run: gradle assembleRelease --stacktrace
 
@@ -103,7 +119,7 @@ jobs:
           set -euo pipefail
           mkdir -p build/npatch-output
           java -jar tools/npatch.jar \
-            "${ORIGINAL_APK}" \
+            "build/origin-stripped.apk" \
             -m build/module/xposed-module-signed.apk \
             -o build/npatch-output \
             -l 2 \
@@ -142,7 +158,7 @@ jobs:
           }
 
           # Read original APK metadata for logging and potential use
-          read_meta_from_aapt2 "${ORIGINAL_APK}" > build/original.meta || true
+          read_meta_from_aapt2 "build/origin-stripped.apk" > build/original.meta || true
           echo "Original APK metadata:"
           cat build/original.meta
 
@@ -237,7 +253,7 @@ jobs:
             printf "%s\n%s\n%s\n" "${package_meta}" "${min_sdk}" "${target_sdk}"
           }
 
-          read_meta "${ORIGINAL_APK}" > build/original-final.meta
+          read_meta "build/origin-stripped.apk" > build/original-final.meta
           if read_meta build/final/racingdaily-npatched.apk > build/patched-final.meta 2>/dev/null; then
             if cmp -s build/original-final.meta build/patched-final.meta; then
               echo "Final metadata verification passed"
