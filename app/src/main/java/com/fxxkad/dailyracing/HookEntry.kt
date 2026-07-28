@@ -30,6 +30,7 @@ class HookEntry : IXposedHookLoadPackage {
         hookAndroidNameService(lpparam.packageName)
         hookShareIntent(lpparam.classLoader)
         hookWeChatSdkSendReq(lpparam.classLoader)
+        AdSdkBlocker.install(lpparam.classLoader)
     }
 
     private fun hookApplicationAttach() {
@@ -121,6 +122,21 @@ class HookEntry : IXposedHookLoadPackage {
                             intent.extras?.keySet()?.any { key ->
                                 key.contains("_wxapi_") || key.contains("_wxobject_")
                             } ?: false
+
+                    // Block quick-app (快应用) launches used by ad landing pages.
+                    val scheme = intent.data?.scheme ?: ""
+                    val isQuickApp = dataString.startsWith("hap://") ||
+                            dataString.startsWith("hwfastapp://") ||
+                            scheme == "hap" || scheme == "hwfastapp" ||
+                            dataString.contains("hapjs") ||
+                            targetPackage == "com.huawei.fastapp" ||
+                            targetPackage == "org.hapjs.mockup" ||
+                            componentName.contains("hapjs")
+                    if (isQuickApp) {
+                        XposedBridge.log("[DailyRacingBlocker] blocked quick-app launch: $dataString $componentName")
+                        param.result = null
+                        return
+                    }
 
                     if (!isQQShare && !isWeChatShare) return
 

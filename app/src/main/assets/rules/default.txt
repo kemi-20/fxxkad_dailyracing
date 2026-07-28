@@ -8,22 +8,62 @@
 ||gdfp.gifshow.com^
 ||e.kuaishou.cn^
 ||e.kuaishou.com^
+||open.e.kuaishou.com^
+||api.e.kuaishou.com^
+||ksapisrv.gifshow.com^
+||zt.gifshow.com^
+||ulog-sdk.gifshow.com^
 ||anythinktech.com^
+||toponad.com^
+||da.toponad.com^
 ||gdt.qq.com^
+||win.gdt.qq.com^
+||c.gdt.qq.com^
+||v.gdt.qq.com^
+||t.gdt.qq.com^
+||qzs.gdtimg.com^
+||pgdt.gtimg.cn^
+||pgdt.gtimg.com^
+||e.qq.com^
 ||bgg.baidu.com^
 ||mobads.baidu.com^
-||e.qq.com^
-||toblog.ctobsnssdk.com^
-||sf3-fe-tos.pglstatp-toutiao.com^
+||mobads-logs.baidu.com^
+||afd.baidu.com^
+||als.baidu.com^
+
+! Pangolin / ByteDance ad
+||pangolin-sdk-toutiao.com^
 ||api-access.pangolin-sdk-toutiao.com^
 ||api-access.pangolin-sdk-toutiao-b.com^
+||pglstatp-toutiao.com^
+||sf3-fe-tos.pglstatp-toutiao.com^
+||dsp.toutiao.com^
+||ad.toutiao.com^
+||is.snssdk.com^
+||i.snssdk.com^
+||log.snssdk.com^
+||extlog.snssdk.com^
+||mon.snssdk.com^
+||toblog.ctobsnssdk.com^
+||ctobsnssdk.com^
+||pangle.io^
+||pangleglobal.com^
 ||mssdk.volces.com^
+
+! Sigmob
+||sigmob.cn^
+||sigmob.com^
+||adservice.sigmob.cn^
 
 ! Push / analytics
 ||jpush.cn^
 ||jpush.io^
 ||umengcloud.com^
 ||umeng.com^
+||ulogs.umeng.com^
+||plbslog.umeng.com^
+||ainfo.umeng.com^
+||msgstat.umengcloud.com^
 
 ! Xiaomi tracking
 ||mcc.inf.miui.com^
@@ -39,9 +79,12 @@
 ||dns.weixin.qq.com.cn^
 ||szlong.weixin.qq.com^
 
-! Kuaishou
-||zt.gifshow.com^
-||ulog-sdk.gifshow.com^
+! Quick-app distribution
+||fastappjump-drcn.hispace.hicloud.com^
+||fastappjump-drcn.hispace.dbankcloud.cn^
+||hapjs.org^
+||statres.quickapp.cn^
+||cdn.quickapp.cn^
 
 ! Other
 ||easytomessage.com^

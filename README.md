@@ -1,13 +1,16 @@
-﻿<p align="center"><img src="icon.png" alt="icon" width="128" height="128"></p>
+<p align="center"><img src="icon.png" alt="icon" width="128" height="128"></p>
 
 # 每日赛车 DNS 拦截模块
 
-这是一个面向 LSPosed/Xposed 的 Android 模块，仅对 `com.romielf.mrsc` 生效。模块通过 Hook 目标应用内的 DNS 解析流程，将广告、统计和跟踪域名解析为 `0.0.0.0`，尽量模拟 AdGuard Home/hosts 级别的域名屏蔽方式，避免直接干扰广告 SDK 初始化造成闪退。
+这是一个面向 LSPosed/Xposed 的 Android 模块，仅对 `com.romielf.mrsc` 生效。模块采用双层去广告策略：一层直接 Hook 应用内的 `cj.mobile` 江湖聚合广告 SDK，使所有广告（开屏/插屏/全屏/激励/原生/Banner/信息流）在加载时立即以 no-fill 失败并跳过，从源头阻止广告展示；另一层 Hook DNS 解析流程，将广告、统计和跟踪域名解析为 `0.0.0.0`，作为纵深防线。同时拦截广告落地页常见的快应用（hap/hwfastapp）跳转。
 
 ## 功能
 
 - 默认作用域：`com.romielf.mrsc`
+- 直接中和 `cj.mobile.CJ*` 全部广告类型（loadAd 立即 onError 并跳过）
+- 拦截快应用（hap://、hwfastapp://）跳转
 - 命中拦截规则时返回 `0.0.0.0`
+- 内置屏蔽域名编译进代码，NPatch 集成模式下同样生效
 - 内置拦截日志 UI
 - 顶部统计显示原始拦截次数
 - 日志列表会合并同一域名 1 分钟内的重复记录
@@ -30,30 +33,69 @@ adx.adwangmai.com
 gdfp.gifshow.com
 e.kuaishou.cn
 e.kuaishou.com
+open.e.kuaishou.com
+api.e.kuaishou.com
+ksapisrv.gifshow.com
+zt.gifshow.com
+ulog-sdk.gifshow.com
 anythinktech.com
+toponad.com
+da.toponad.com
 gdt.qq.com
+win.gdt.qq.com
+c.gdt.qq.com
+v.gdt.qq.com
+t.gdt.qq.com
+qzs.gdtimg.com
+pgdt.gtimg.cn
+pgdt.gtimg.com
+e.qq.com
 bgg.baidu.com
 mobads.baidu.com
-e.qq.com
+mobads-logs.baidu.com
+afd.baidu.com
+als.baidu.com
+pangolin-sdk-toutiao.com
+api-access.pangolin-sdk-toutiao.com
+api-access.pangolin-sdk-toutiao-b.com
+pglstatp-toutiao.com
+sf3-fe-tos.pglstatp-toutiao.com
+dsp.toutiao.com
+ad.toutiao.com
+is.snssdk.com
+i.snssdk.com
+log.snssdk.com
+extlog.snssdk.com
+mon.snssdk.com
+toblog.ctobsnssdk.com
+ctobsnssdk.com
+pangle.io
+pangleglobal.com
+mssdk.volces.com
+sigmob.cn
+sigmob.com
+adservice.sigmob.cn
 jpush.cn
 jpush.io
 umengcloud.com
 umeng.com
+ulogs.umeng.com
+plbslog.umeng.com
+ainfo.umeng.com
+msgstat.umengcloud.com
 mcc.inf.miui.com
 tracking.miui.com
 tnc3-aliec2.zijieapi.com
 tnc3-alisc1.zijieapi.com
 tnc3-bjlgy.zijieapi.com
-toblog.ctobsnssdk.com
-sf3-fe-tos.pglstatp-toutiao.com
-api-access.pangolin-sdk-toutiao.com
-api-access.pangolin-sdk-toutiao-b.com
-mssdk.volces.com
 h.trace.qq.com
 dns.weixin.qq.com.cn
 szlong.weixin.qq.com
-zt.gifshow.com
-ulog-sdk.gifshow.com
+fastappjump-drcn.hispace.hicloud.com
+fastappjump-drcn.hispace.dbankcloud.cn
+hapjs.org
+statres.quickapp.cn
+cdn.quickapp.cn
 easytomessage.com
 ```
 
