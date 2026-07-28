@@ -15,8 +15,8 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   BUILD_TOOLS_VERSION: "36.0.0"
-  NPATCH_VERSION: "v1.0.1"
-  NPATCH_JAR_NAME: "jar-v1.0.1-577-release.jar"
+  NPATCH_VERSION: "v1.0.2"
+  NPATCH_JAR_NAME: "jar-v1.0.2-586-release.jar"
   ORIGINAL_APK: "origin/racingdaily.apk"
 
 jobs:
