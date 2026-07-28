@@ -4,6 +4,15 @@
 
 这是一个面向 LSPosed/Xposed 的 Android 模块，仅对 `com.romielf.mrsc` 生效。模块采用双层去广告策略：一层直接 Hook 应用内的 `cj.mobile` 江湖聚合广告 SDK，使所有广告（开屏/插屏/全屏/激励/原生/Banner/信息流）在加载时立即以 no-fill 失败并跳过，从源头阻止广告展示；另一层 Hook DNS 解析流程，将广告、统计和跟踪域名解析为 `0.0.0.0`，作为纵深防线。同时拦截广告落地页常见的快应用（hap/hwfastapp）跳转。
 
+## 文档
+
+完整的项目文档托管在 [GitHub Wiki](https://github.com/kemi-20/fxxkad_dailyracing/wiki)，涵盖架构设计、Hook 机制、规则引擎与 API 参考：
+
+- [项目概览](https://github.com/kemi-20/fxxkad_dailyracing/wiki/项目概览) — 核心功能、架构与整体流程
+- [快速开始](https://github.com/kemi-20/fxxkad_dailyracing/wiki/快速开始) — 环境准备、构建与安装
+- [核心架构](https://github.com/kemi-20/fxxkad_dailyracing/wiki/核心架构) · [Hook 机制设计](https://github.com/kemi-20/fxxkad_dailyracing/wiki/Hook机制设计) · [广告拦截器](https://github.com/kemi-20/fxxkad_dailyracing/wiki/广告拦截器) · [规则引擎架构](https://github.com/kemi-20/fxxkad_dailyracing/wiki/规则引擎架构)
+- [配置管理](https://github.com/kemi-20/fxxkad_dailyracing/wiki/配置管理) · [开发指南](https://github.com/kemi-20/fxxkad_dailyracing/wiki/开发指南) · [API 参考](https://github.com/kemi-20/fxxkad_dailyracing/wiki/API参考) · [故障排除](https://github.com/kemi-20/fxxkad_dailyracing/wiki/故障排除)
+
 ## 功能
 
 - 默认作用域：`com.romielf.mrsc`
