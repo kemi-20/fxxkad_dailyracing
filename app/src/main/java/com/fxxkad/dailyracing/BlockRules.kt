@@ -154,7 +154,7 @@ object BlockRules {
         }
     }
 
-    /** Reads assets/rules/*.txt directly from the module APK (works in integrated mode). */
+    /** Reads bundled rule files under assets/rules from the module APK (works in integrated mode). */
     private fun loadFromModuleApk(output: MutableSet<String>) {
         try {
             val location = javaClass.protectionDomain?.codeSource?.location ?: return
