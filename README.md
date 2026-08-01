@@ -110,10 +110,10 @@ easytomessage.com
 
 ## 构建
 
-项目使用 Android Gradle Plugin、Kotlin 和 Gradle 8.4：
+项目使用 Android Gradle Plugin 和 Kotlin：
 
 ```powershell
-gradle test assembleDebug
+gradle assembleDebug
 ```
 
 本机需要配置 Android SDK。若没有全局配置，可在项目根目录创建 `local.properties`：
@@ -133,11 +133,11 @@ app/build/outputs/apk/debug/app-debug.apk
 仓库包含 `Build Integrated RacingDaily APK` workflow。它会：
 
 1. 构建并签名本 Xposed 模块。
-2. 下载 NPatch v1.0.6，并验证官方发布文件的 SHA-256。
+2. 下载 LSPatch jar。
 3. 以集成模式把模块注入 `origin/racingdaily.apk`。
-4. 使用仓库 secrets 中的同一份证书签名模块和整合 APK。
-5. 严格验证 ZIP 结构、模块嵌入、页面对齐、签名证书以及包名和版本元数据。
-6. 分别上传整合 APK 与独立 Xposed 模块作为 artifacts。
+4. 尽量保留原 APK 的包名、versionCode、versionName、minSdk 和 targetSdk。
+5. 使用仓库 secrets 中的证书重新签名最终 APK。
+6. 上传 `racingdaily-lspatched.apk` 作为 artifact。
 
 需要配置以下 GitHub Actions secrets：
 
@@ -149,10 +149,6 @@ KEY_PASSWORD
 ```
 
 `origin/racingdaily.apk` 使用 Git LFS 跟踪，首次 clone 后请确保已启用 Git LFS。
-
-NPatch 当前官方最低支持 Android 9；独立 Xposed 模块本身最低支持 Android 7.0。
-
-原始每日赛车 APK 内含仅按 4 KB 构建的第三方原生库，无法在没有这些库源码的情况下真正改造成 16 KB ELF。整合 APK 会验证 4 KB ZIP 对齐，并在 Android 16 的系统页面大小兼容模式下运行；只有原应用及其全部原生依赖重新编译后，才能通过严格的 16 KB 检查。
 
 日志 Provider 仅接受本模块自身和目标应用 `com.romielf.mrsc` 的调用。目标应用只能写入拦截记录和读取“修复分享”开关，清空日志、读取日志和修改设置仅允许模块自身执行。
 
