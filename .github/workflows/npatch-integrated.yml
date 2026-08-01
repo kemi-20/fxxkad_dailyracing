@@ -66,6 +66,7 @@ jobs:
       - name: Validate original APK
         run: |
           set -euo pipefail
+          mkdir -p build
           test -s "${ORIGINAL_APK}"
           if head -c 64 "${ORIGINAL_APK}" | grep -q "git-lfs.github.com/spec"; then
             echo "Original APK is still a Git LFS pointer" >&2
