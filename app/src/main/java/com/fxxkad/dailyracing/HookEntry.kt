@@ -14,17 +14,21 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam
 import java.net.InetAddress
+import java.util.ArrayDeque
 import java.util.Collections
+import java.util.IdentityHashMap
 
 class HookEntry : IXposedHookLoadPackage {
     @Volatile
     private var targetContext: Context? = null
-    private val pendingRecords = Collections.synchronizedList(mutableListOf<BlockEvent>())
+    private val pendingRecords = ArrayDeque<BlockEvent>()
+    private val pendingRecordsLock = Any()
 
     override fun handleLoadPackage(lpparam: LoadPackageParam) {
         if (lpparam.packageName != BlockRules.targetPackage) return
 
         XposedBridge.log("[DailyRacingBlocker] enabled for ${lpparam.packageName}")
+        BlockRules.loadRules()
         hookApplicationAttach()
         hookInetAddress(lpparam.packageName)
         hookAndroidNameService(lpparam.packageName)
@@ -42,7 +46,7 @@ class HookEntry : IXposedHookLoadPackage {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     targetContext = (param.args.firstOrNull() as? Context)?.applicationContext
                     XposedBridge.log("[DailyRacingBlocker] context attached")
-                    BlockRules.loadRules(targetContext)
+                    BlockRules.loadRules(targetContext, force = true)
                     flushPendingRecords()
                 }
             }
@@ -133,7 +137,10 @@ class HookEntry : IXposedHookLoadPackage {
                             targetPackage == "org.hapjs.mockup" ||
                             componentName.contains("hapjs")
                     if (isQuickApp) {
-                        XposedBridge.log("[DailyRacingBlocker] blocked quick-app launch: $dataString $componentName")
+                        XposedBridge.log(
+                            "[DailyRacingBlocker] blocked quick-app launch " +
+                                "(scheme=$scheme, package=$targetPackage, component=$componentName)"
+                        )
                         param.result = null
                         return
                     }
@@ -168,7 +175,7 @@ class HookEntry : IXposedHookLoadPackage {
                     if (!urlToShare.isNullOrEmpty()) {
                         val appName = if (isWeChatShare) "WeChat" else "QQ"
                         val shareText = buildShareText(titleToShare, urlToShare)
-                        XposedBridge.log("[DailyRacingBlocker] Intercepted $appName rich share, converting to text: $shareText")
+                        XposedBridge.log("[DailyRacingBlocker] converted $appName rich share to plain text")
 
                         val plainTextIntent = Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
@@ -271,9 +278,10 @@ class HookEntry : IXposedHookLoadPackage {
             if (!isFixShareEnabled()) return
 
             val shareText = buildShareText(title, url)
-            XposedBridge.log("[DailyRacingBlocker] Intercepted WX sendReq, text=$shareText")
-            param.result = true
-            startWxPlainTextShare(shareText)
+            XposedBridge.log("[DailyRacingBlocker] converted WeChat SDK share to plain text")
+            if (startWxPlainTextShare(shareText)) {
+                param.result = true
+            }
         } catch (t: Throwable) {
             XposedBridge.log("[DailyRacingBlocker] sendReq hook error: ${t.message}")
         }
@@ -304,8 +312,8 @@ class HookEntry : IXposedHookLoadPackage {
         }
     }
 
-    private fun startWxPlainTextShare(text: String) {
-        val ctx = resolveContext() ?: return
+    private fun startWxPlainTextShare(text: String): Boolean {
+        val ctx = resolveContext() ?: return false
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, text)
@@ -316,7 +324,13 @@ class HookEntry : IXposedHookLoadPackage {
         }
         val chooser = Intent.createChooser(intent, null)
         chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        ctx.startActivity(chooser)
+        return try {
+            ctx.startActivity(chooser)
+            true
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] unable to start WeChat text share: ${t.message}")
+            false
+        }
     }
 
     private fun isFixShareEnabled(): Boolean {
@@ -324,8 +338,8 @@ class HookEntry : IXposedHookLoadPackage {
         return try {
             val bundle = context.contentResolver.call(
                 BlockRecordProvider.CONTENT_URI,
-                "get_setting",
-                "fix_share",
+                BlockRecordProvider.METHOD_GET_SETTING,
+                BlockRecordProvider.SETTING_FIX_SHARE,
                 null
             )
             bundle?.getBoolean("value", true) ?: true
@@ -359,7 +373,8 @@ class HookEntry : IXposedHookLoadPackage {
     private fun decodeMaybeBase64(value: String?): String? {
         if (value.isNullOrEmpty()) return null
         return try {
-            String(Base64.decode(value, Base64.DEFAULT))
+            val decoded = String(Base64.decode(value.replace(' ', '+'), Base64.DEFAULT), Charsets.UTF_8)
+            if (decoded.startsWith("https://") || decoded.startsWith("http://")) decoded else value
         } catch (_: Exception) {
             value
         }
@@ -385,16 +400,31 @@ class HookEntry : IXposedHookLoadPackage {
 
     @Suppress("DEPRECATION")
     private fun findUrlInBundle(bundle: Bundle?, classLoader: ClassLoader): String? {
-        if (bundle == null) return null
+        return findUrlInBundle(
+            bundle,
+            classLoader,
+            depth = 0,
+            visited = Collections.newSetFromMap(IdentityHashMap<Bundle, Boolean>())
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun findUrlInBundle(
+        bundle: Bundle?,
+        classLoader: ClassLoader,
+        depth: Int,
+        visited: MutableSet<Bundle>
+    ): String? {
+        if (bundle == null || depth > MAX_BUNDLE_DEPTH || !visited.add(bundle)) return null
         try {
             bundle.classLoader = classLoader
-            for (key in bundle.keySet()) {
+            for (key in bundle.keySet().take(MAX_BUNDLE_KEYS)) {
                 val value = bundle.get(key)
                 if (value is String) {
-                    val match = Regex("https?://[^\\s]+").find(value)
+                    val match = URL_PATTERN.find(value.take(MAX_BUNDLE_STRING_LENGTH))
                     if (match != null) return match.value
                 } else if (value is Bundle) {
-                    findUrlInBundle(value, classLoader)?.let { return it }
+                    findUrlInBundle(value, classLoader, depth + 1, visited)?.let { return it }
                 }
             }
         } catch (_: Exception) {}
@@ -418,7 +448,10 @@ class HookEntry : IXposedHookLoadPackage {
 
         val context = resolveContext()
         if (context == null) {
-            pendingRecords.add(event)
+            synchronized(pendingRecordsLock) {
+                if (pendingRecords.size == MAX_PENDING_RECORDS) pendingRecords.removeFirst()
+                pendingRecords.addLast(event)
+            }
             return
         }
         saveRecord(context, event)
@@ -426,14 +459,13 @@ class HookEntry : IXposedHookLoadPackage {
 
     private fun flushPendingRecords() {
         val context = resolveContext() ?: return
-        val copy = synchronized(pendingRecords) {
+        val copy = synchronized(pendingRecordsLock) {
             pendingRecords.toList().also { pendingRecords.clear() }
         }
         copy.forEach { saveRecord(context, it) }
     }
 
     private fun saveRecord(context: Context, event: BlockEvent) {
-        var providerSaved = false
         try {
             val values = ContentValues().apply {
                 put(BlockRecordStore.COL_TIME, event.time)
@@ -442,42 +474,14 @@ class HookEntry : IXposedHookLoadPackage {
                 put(BlockRecordStore.COL_SOURCE, event.source)
                 put(BlockRecordStore.COL_RESULT, event.result)
             }
-            providerSaved = context.contentResolver.insert(BlockRecordProvider.CONTENT_URI, values) != null
-        } catch (_: Throwable) {
-            // Provider unreachable in target process — will fall back to broadcast
-        }
-        if (!providerSaved) {
-            sendRecordBroadcast(context, event)
+            context.contentResolver.insert(BlockRecordProvider.CONTENT_URI, values)
+        } catch (t: Throwable) {
+            XposedBridge.log("[DailyRacingBlocker] record provider unavailable: ${t.message}")
         }
     }
 
     private fun resolveContext(): Context? {
-        targetContext?.let { return it }
-        return try {
-            val activityThread = Class.forName("android.app.ActivityThread")
-            val app = activityThread.getMethod("currentApplication").invoke(null) as? Application
-            app?.applicationContext?.also {
-                targetContext = it
-                BlockRules.loadRules(it)
-                flushPendingRecords()
-            }
-        } catch (t: Throwable) {
-            null
-        }
-    }
-
-    private fun sendRecordBroadcast(context: Context, event: BlockEvent) {
-        try {
-            val intent = Intent(BlockRecordReceiver.ACTION_RECORD_BLOCK).apply {
-                setPackage("com.fxxkad.dailyracing")
-                putExtra(BlockRecordReceiver.EXTRA_TIME, event.time)
-                putExtra(BlockRecordReceiver.EXTRA_PACKAGE, event.packageName)
-                putExtra(BlockRecordReceiver.EXTRA_HOST, event.host)
-                putExtra(BlockRecordReceiver.EXTRA_SOURCE, "${event.source}/broadcast")
-                putExtra(BlockRecordReceiver.EXTRA_RESULT, event.result)
-            }
-            context.sendBroadcast(intent)
-        } catch (_: Throwable) {}
+        return targetContext
     }
 
     private data class BlockEvent(
@@ -487,4 +491,12 @@ class HookEntry : IXposedHookLoadPackage {
         val source: String,
         val result: String
     )
+
+    companion object {
+        private const val MAX_PENDING_RECORDS = 100
+        private const val MAX_BUNDLE_DEPTH = 8
+        private const val MAX_BUNDLE_KEYS = 256
+        private const val MAX_BUNDLE_STRING_LENGTH = 32_768
+        private val URL_PATTERN = Regex("https?://[^\\s]+")
+    }
 }

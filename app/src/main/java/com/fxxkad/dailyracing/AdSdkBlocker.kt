@@ -86,15 +86,29 @@ object AdSdkBlocker {
             } catch (t: Throwable) {
                 XposedBridge.log("$TAG loadAd neutralize error: ${t.message}")
             } finally {
-                // Always skip the original loadAd so no ad request is made.
-                param.result = null
+                skipOriginalWithSafeDefault(param)
             }
         }
     }
 
     private val showAdHook = object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
-            param.result = null
+            skipOriginalWithSafeDefault(param)
+        }
+    }
+
+    private fun skipOriginalWithSafeDefault(param: XC_MethodHook.MethodHookParam) {
+        val returnType = (param.method as? Method)?.returnType
+        param.result = when (returnType) {
+            java.lang.Boolean.TYPE -> false
+            java.lang.Byte.TYPE -> 0.toByte()
+            java.lang.Short.TYPE -> 0.toShort()
+            java.lang.Integer.TYPE -> 0
+            java.lang.Long.TYPE -> 0L
+            java.lang.Float.TYPE -> 0f
+            java.lang.Double.TYPE -> 0.0
+            java.lang.Character.TYPE -> '\u0000'
+            else -> null
         }
     }
 

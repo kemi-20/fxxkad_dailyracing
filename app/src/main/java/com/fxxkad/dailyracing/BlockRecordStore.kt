@@ -20,15 +20,22 @@ object BlockRecordStore {
     const val PREF_TOTAL_COUNT = "total_count"
     const val PREF_FIX_SHARE = "fix_share"
 
+    @Volatile
+    private var databaseHelper: DatabaseHelper? = null
+    private val totalCountLock = Any()
+
     fun getTotalCount(context: Context): Long {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getLong(PREF_TOTAL_COUNT, 0L)
     }
 
     private fun incrementTotalCount(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val current = prefs.getLong(PREF_TOTAL_COUNT, 0L)
-        prefs.edit().putLong(PREF_TOTAL_COUNT, current + 1).apply()
+        synchronized(totalCountLock) {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val current = prefs.getLong(PREF_TOTAL_COUNT, 0L)
+            val updated = if (current == Long.MAX_VALUE) Long.MAX_VALUE else current + 1
+            prefs.edit().putLong(PREF_TOTAL_COUNT, updated).apply()
+        }
     }
 
     fun isFixShareEnabled(context: Context): Boolean {
@@ -44,11 +51,11 @@ object BlockRecordStore {
 
     fun setFixShareEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putBoolean(PREF_FIX_SHARE, enabled).commit()
+            .edit().putBoolean(PREF_FIX_SHARE, enabled).apply()
     }
 
     fun insert(context: Context, values: ContentValues): Long {
-        val db = DatabaseHelper(context.applicationContext).writableDatabase
+        val db = helper(context).writableDatabase
         val id = db.insert(TABLE_RECORDS, null, values)
         if (id != -1L) {
             incrementTotalCount(context)
@@ -57,8 +64,8 @@ object BlockRecordStore {
         return id
     }
 
-    fun query(context: Context, limit: String): Cursor {
-        return DatabaseHelper(context.applicationContext).readableDatabase.query(
+    fun query(context: Context, limit: Int): Cursor {
+        return helper(context).readableDatabase.query(
             TABLE_RECORDS,
             null,
             null,
@@ -66,12 +73,19 @@ object BlockRecordStore {
             null,
             null,
             "$COL_ID DESC",
-            limit
+            limit.toString()
         )
     }
 
     fun deleteAll(context: Context): Int {
-        return DatabaseHelper(context.applicationContext).writableDatabase.delete(TABLE_RECORDS, null, null)
+        return helper(context).writableDatabase.delete(TABLE_RECORDS, null, null)
+    }
+
+    private fun helper(context: Context): DatabaseHelper {
+        databaseHelper?.let { return it }
+        return synchronized(this) {
+            databaseHelper ?: DatabaseHelper(context.applicationContext).also { databaseHelper = it }
+        }
     }
 
     private fun trimRecords(db: SQLiteDatabase) {

@@ -9,60 +9,93 @@ on:
       - ".github/workflows/npatch-integrated.yml"
       - "app/**"
       - "build.gradle"
+      - "gradle.properties"
       - "settings.gradle"
+      - "gradle/**"
+      - "gradlew"
       - "origin/racingdaily.apk"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npatch-integrated-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   BUILD_TOOLS_VERSION: "36.0.0"
-  NPATCH_VERSION: "v1.0.5"
-  NPATCH_JAR_NAME: "jar-v1.0.5-639-release.jar"
+  NPATCH_VERSION: "v1.0.6"
+  NPATCH_JAR_NAME: "jar-v1.0.6-698-release.jar"
+  NPATCH_SHA256: "9e9ba3a2bbfee120940b20bb6950f85b872627d921da8e13f664158b4d5ca5fc"
   ORIGINAL_APK: "origin/racingdaily.apk"
 
 jobs:
   build-integrated:
     name: Build integrated NPatch APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           lfs: true
+          persist-credentials: false
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v5
+      - name: Set up JDK 17 for Android build
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
         with:
-          java-version: "21"
+          java-version: "17"
           distribution: "temurin"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
-      - name: Install Android build tools
+      - name: Install Android SDK packages
         run: |
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager "platforms;android-33" "build-tools;${BUILD_TOOLS_VERSION}"
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;${BUILD_TOOLS_VERSION}"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
         with:
-          gradle-version: "8.13"
+          gradle-version: "8.4"
 
-      - name: Verify original APK exists
+      - name: Validate original APK
         run: |
-          test -f "${ORIGINAL_APK}"
-          ls -lh "${ORIGINAL_APK}"
+          set -euo pipefail
+          test -s "${ORIGINAL_APK}"
+          if head -c 64 "${ORIGINAL_APK}" | grep -q "git-lfs.github.com/spec"; then
+            echo "Original APK is still a Git LFS pointer" >&2
+            exit 1
+          fi
+          unzip -tqq "${ORIGINAL_APK}"
+          unzip -l "${ORIGINAL_APK}" AndroidManifest.xml | grep -q AndroidManifest.xml
+          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/aapt2" dump badging "${ORIGINAL_APK}" > build/original.badging
+          cat build/original.badging | grep -E "^(package:|sdkVersion:|targetSdkVersion:)"
 
       - name: Build Xposed module
-        run: gradle assembleRelease --stacktrace
+        run: gradle --no-daemon clean test lint assembleRelease --stacktrace
 
-      - name: Decode signing keystore
+      - name: Decode and validate signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?Missing KEYSTORE_BASE64 secret}"
+          : "${KEYSTORE_PASSWORD:?Missing KEYSTORE_PASSWORD secret}"
+          : "${KEY_ALIAS:?Missing KEY_ALIAS secret}"
           mkdir -p build/signing
           printf "%s" "${KEYSTORE_BASE64}" | base64 --decode > build/signing/release.keystore
+          test -s build/signing/release.keystore
+          keytool -list \
+            -keystore build/signing/release.keystore \
+            -storepass "${KEYSTORE_PASSWORD}" \
+            -alias "${KEY_ALIAS}" >/dev/null
 
       - name: Sign Xposed module APK
         env:
@@ -71,10 +104,12 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          UNSIGNED_MODULE="$(find app/build/outputs/apk/release -maxdepth 1 -name "*release*.apk" | head -n 1)"
-          test -n "${UNSIGNED_MODULE}"
+          : "${KEY_PASSWORD:?Missing KEY_PASSWORD secret}"
+          mapfile -t module_apks < <(find app/build/outputs/apk/release -maxdepth 1 -type f -name "*.apk")
+          test "${#module_apks[@]}" -eq 1
           mkdir -p build/module
-          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/zipalign" -p -f 4 "${UNSIGNED_MODULE}" build/module/module-aligned.apk
+          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/zipalign" \
+            -P 16 -f -v 4 "${module_apks[0]}" build/module/module-aligned.apk
           "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" sign \
             --ks build/signing/release.keystore \
             --ks-key-alias "${KEY_ALIAS}" \
@@ -82,57 +117,78 @@ jobs:
             --key-pass "pass:${KEY_PASSWORD}" \
             --out build/module/xposed-module-signed.apk \
             build/module/module-aligned.apk
-          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose build/module/xposed-module-signed.apk
+          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify \
+            --verbose --print-certs build/module/xposed-module-signed.apk
 
-      - name: Download NPatch and apktool
+      - name: Download and verify NPatch
         run: |
+          set -euo pipefail
           mkdir -p tools
-          curl -L --fail \
-            -o tools/npatch.jar \
+          curl --fail --location --retry 3 --retry-all-errors \
+            --output tools/npatch.jar \
             "https://github.com/7723mod/NPatch/releases/download/${NPATCH_VERSION}/${NPATCH_JAR_NAME}"
-          curl -L --fail \
-            -o tools/apktool.jar \
-            "https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar"
+          echo "${NPATCH_SHA256}  tools/npatch.jar" | sha256sum --check --strict
 
-      - name: Prepare keystore for NPatch
+      - name: Set up JDK 21 for NPatch
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          java-version: "21"
+          distribution: "temurin"
+
+      - name: Prepare BKS keystore for NPatch
         env:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          # NPatch v1.0.5+ hardcodes KeyStore.getInstance("BKS").
-          # Detect the keystore type by magic bytes and handle accordingly.
-          KEYSTORE_TYPE=$(python3 -c "
-          with open('build/signing/release.keystore', 'rb') as f:
-              magic = f.read(4)
-          # PKCS12 starts with ASN.1 SEQUENCE (0x30); BKS starts with a version int (0x00...)
-          print('PKCS12' if magic[0] == 0x30 else 'BKS')
-          ")
-          echo "Detected keystore type: ${KEYSTORE_TYPE}"
+          provider_args=(
+            -providerclass org.bouncycastle.jce.provider.BouncyCastleProvider
+            -providerpath tools/npatch.jar
+          )
 
-          if [ "${KEYSTORE_TYPE}" = "PKCS12" ]; then
-            # Register BouncyCastle provider (bundled in NPatch jar) for BKS support
-            JAVA_SECURITY="${JAVA_HOME}/conf/security/java.security"
-            MAX_PROVIDER=$(grep -oE '^security\.provider\.[0-9]+=' "${JAVA_SECURITY}" | grep -oE '[0-9]+' | sort -n | tail -1)
-            NEXT_PROVIDER=$((MAX_PROVIDER + 1))
-            echo "security.provider.${NEXT_PROVIDER}=org.bouncycastle.jce.provider.BouncyCastleProvider" >> "${JAVA_SECURITY}"
-            echo "Registered BouncyCastle as provider ${NEXT_PROVIDER}"
-
-            # Convert PKCS12 keystore to BKS
-            keytool -importkeystore \
-              -srckeystore build/signing/release.keystore -srcstoretype PKCS12 \
-              -srcstorepass "${KEYSTORE_PASSWORD}" -srcalias "${KEY_ALIAS}" -srckeypass "${KEY_PASSWORD}" \
-              -destkeystore build/signing/release-final.keystore -deststoretype BKS \
-              -deststorepass "${KEYSTORE_PASSWORD}" -destalias "${KEY_ALIAS}" -destkeypass "${KEY_PASSWORD}" \
-              -providerclass org.bouncycastle.jce.provider.BouncyCastleProvider \
-              -providerpath tools/npatch.jar
-            echo "Converted PKCS12 keystore to BKS"
-          else
-            # BKS keystore detected, use directly without conversion or BouncyCastle registration
-            echo "BKS keystore detected, using directly"
+          if keytool -list -storetype BKS "${provider_args[@]}" \
+            -keystore build/signing/release.keystore \
+            -storepass "${KEYSTORE_PASSWORD}" -alias "${KEY_ALIAS}" >/dev/null 2>&1; then
             cp build/signing/release.keystore build/signing/release-final.keystore
+          else
+            source_type=""
+            for candidate in PKCS12 JKS; do
+              if keytool -list -storetype "${candidate}" \
+                -keystore build/signing/release.keystore \
+                -storepass "${KEYSTORE_PASSWORD}" -alias "${KEY_ALIAS}" >/dev/null 2>&1; then
+                source_type="${candidate}"
+                break
+              fi
+            done
+            test -n "${source_type}"
+            keytool -importkeystore -noprompt \
+              -srckeystore build/signing/release.keystore \
+              -srcstoretype "${source_type}" \
+              -srcstorepass "${KEYSTORE_PASSWORD}" \
+              -srcalias "${KEY_ALIAS}" \
+              -srckeypass "${KEY_PASSWORD}" \
+              -destkeystore build/signing/release-final.keystore \
+              -deststoretype BKS \
+              -deststorepass "${KEYSTORE_PASSWORD}" \
+              -destalias "${KEY_ALIAS}" \
+              -destkeypass "${KEY_PASSWORD}" \
+              "${provider_args[@]}"
           fi
+
+          keytool -list -storetype BKS "${provider_args[@]}" \
+            -keystore build/signing/release-final.keystore \
+            -storepass "${KEYSTORE_PASSWORD}" -alias "${KEY_ALIAS}" >/dev/null
+          keytool -exportcert -storetype BKS "${provider_args[@]}" \
+            -keystore build/signing/release-final.keystore \
+            -storepass "${KEYSTORE_PASSWORD}" -alias "${KEY_ALIAS}" \
+            -file build/signing/release-cert.der
+
+          security_file="${JAVA_HOME}/conf/security/java.security"
+          last_provider="$(sed -n 's/^security\.provider\.\([0-9][0-9]*\)=.*/\1/p' "${security_file}" | sort -n | tail -n 1)"
+          test -n "${last_provider}"
+          printf 'security.provider.%s=org.bouncycastle.jce.provider.BouncyCastleProvider\n' \
+            "$((last_provider + 1))" > build/signing/npatch-security.properties
 
       - name: Inject module with NPatch integrated mode
         env:
@@ -141,176 +197,118 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          mkdir -p build/npatch-output
-          # NPatch v1.0.5+ hardcodes BKS keystore; pass our (converted or
-          # original) BKS keystore via -k so NPatch signs directly with the
-          # release key. This avoids a post-hoc apksigner re-sign which would
-          # duplicate NPatch's nested ZIP-linked entries and double the APK size.
-          java -jar tools/npatch.jar \
+          mkdir -p build/npatch-output build/final
+          java -Djava.security.properties=build/signing/npatch-security.properties \
+            -jar tools/npatch.jar \
             "${ORIGINAL_APK}" \
-            -m build/module/xposed-module-signed.apk \
-            -o build/npatch-output \
-            -k build/signing/release-final.keystore "${KEYSTORE_PASSWORD}" "${KEY_ALIAS}" "${KEY_PASSWORD}" \
-            -l 2 \
-            -v
-          PATCHED_APK="$(find build/npatch-output -type f -name "*.apk" | head -n 1)"
-          test -n "${PATCHED_APK}"
-          cp "${PATCHED_APK}" build/racingdaily-npatched-raw.apk
-          # NPatch catches PatchError but exits 0; validate output ourselves
-          python3 -c "
-          import zipfile, sys
-          with zipfile.ZipFile('build/racingdaily-npatched-raw.apk') as z:
-              names = z.namelist()
-              if 'AndroidManifest.xml' not in names:
-                  print('ERROR: NPatch output is missing AndroidManifest.xml', file=sys.stderr)
-                  sys.exit(1)
-          print(f'NPatch output OK ({len(names)} entries, AndroidManifest.xml present)')
-          "
+            --embed build/module/xposed-module-signed.apk \
+            --output build/npatch-output \
+            --keystore build/signing/release-final.keystore "${KEYSTORE_PASSWORD}" "${KEY_ALIAS}" "${KEY_PASSWORD}" \
+            --sigbypasslv 2 \
+            --verbose
 
-
-      - name: Preserve original version and Android SDK metadata
-        env:
-          BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOLS_VERSION }}
-        run: |
-          set -euo pipefail
-          AAPT2="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/aapt2"
-
-          read_meta_from_aapt2() {
-            local apk="$1"
-            local badging
-            badging="$("${AAPT2}" dump badging "${apk}")"
-            local package_meta min_sdk target_sdk
-            package_meta="$(printf "%s\n" "${badging}" | sed -n "s/^package: name='\([^']*\)' versionCode='\([^']*\)' versionName='\([^']*\)'.*/package=\1 versionCode=\2 versionName=\3/p")"
-            min_sdk="$(printf "%s\n" "${badging}" | sed -n "s/^sdkVersion:'\([^']*\)'.*/minSdk=\1/p")"
-            target_sdk="$(printf "%s\n" "${badging}" | sed -n "s/^targetSdkVersion:'\([^']*\)'.*/targetSdk=\1/p")"
-            printf "%s\n%s\n%s\n" "${package_meta}" "${min_sdk}" "${target_sdk}"
-          }
-
-          # Read original APK metadata for logging and potential use
-          read_meta_from_aapt2 "${ORIGINAL_APK}" > build/original.meta || true
-          echo "Original APK metadata:"
-          cat build/original.meta
-
-          # Try reading NPatch output with aapt2
-          if read_meta_from_aapt2 build/racingdaily-npatched-raw.apk > build/patched.meta 2>/dev/null; then
-            echo "Patched APK metadata:"
-            cat build/patched.meta
-            if cmp -s build/original.meta build/patched.meta; then
-              echo "Metadata matches, using NPatch output directly"
-              cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
-              exit 0
-            fi
-            echo "Metadata differs, will try apktool fix"
-          else
-            echo "aapt2 cannot read NPatch output"
-          fi
-
-          # Try apktool; it uses its own parsers that may handle NPatch's zip format
-          echo "Trying apktool decompile..."
-          java -jar tools/apktool.jar d -f -s "${ORIGINAL_APK}" -o build/apktool-original
-
-          if java -jar tools/apktool.jar d -f -s build/racingdaily-npatched-raw.apk -o build/apktool-patched 2>/dev/null; then
-            echo "Apktool decompile succeeded, fixing metadata..."
-            python3 - <<'PY'
-          import re
+          python3 - <<'PY'
           from pathlib import Path
+          import hashlib
+          import shutil
+          import sys
+          import zipfile
 
-          original = Path("build/apktool-original/apktool.yml").read_text(encoding="utf-8")
-          patched_path = Path("build/apktool-patched/apktool.yml")
-          patched = patched_path.read_text(encoding="utf-8")
+          candidates = []
+          module_path = Path("build/module/xposed-module-signed.apk")
+          module_digest = hashlib.sha256(module_path.read_bytes()).digest()
+          embedded_module = "assets/npatch/modules/com.fxxkad.dailyracing.apk"
+          for apk in Path("build/npatch-output").rglob("*.apk"):
+              try:
+                  with zipfile.ZipFile(apk) as archive:
+                      names = set(archive.namelist())
+                      if (
+                          "AndroidManifest.xml" in names
+                          and embedded_module in names
+                          and archive.read("AndroidManifest.xml")
+                          and hashlib.sha256(archive.read(embedded_module)).digest() == module_digest
+                      ):
+                          candidates.append(apk)
+              except (KeyError, zipfile.BadZipFile):
+                  continue
 
-          def section(text, name):
-              match = re.search(rf"^{name}:\n(?:  .*\n)*", text, flags=re.MULTILINE)
-              if not match:
-                  raise SystemExit(f"Missing {name} in apktool.yml")
-              return match.group(0)
+          if not candidates:
+              raise SystemExit("NPatch did not produce a valid APK containing AndroidManifest.xml")
 
-          for name in ("versionInfo", "sdkInfo"):
-              original_section = section(original, name)
-              patched_match = re.search(rf"^{name}:\n(?:  .*\n)*", patched, flags=re.MULTILINE)
-              if patched_match:
-                  patched = patched[:patched_match.start()] + original_section + patched[patched_match.end():]
-              else:
-                  patched += "\n" + original_section
-
-          patched_path.write_text(patched, encoding="utf-8")
+          selected = max(candidates, key=lambda path: path.stat().st_size)
+          print(f"Selected NPatch output: {selected} ({selected.stat().st_size} bytes)")
+          shutil.copyfile(selected, "build/final/racingdaily-npatched.apk")
           PY
-            java -jar tools/apktool.jar b build/apktool-patched -o build/racingdaily-npatched-metadata.apk
 
-            if read_meta_from_aapt2 build/racingdaily-npatched-metadata.apk > build/restored.meta 2>/dev/null; then
-              if cmp -s build/original.meta build/restored.meta; then
-                echo "Apktool metadata fix successful"
-                exit 0
-              fi
-              echo "Warning: rebuilt APK metadata still differs, using NPatch output directly"
-            else
-              echo "Warning: rebuilt APK unreadable, using NPatch output directly"
-            fi
-          else
-            echo "Apktool cannot decompile NPatch output, using NPatch output directly"
-          fi
-
-          # Fallback: use NPatch output as-is (metadata preserved internally by NPatch)
-          echo "Using NPatch output directly"
-          cp build/racingdaily-npatched-raw.apk build/racingdaily-npatched-metadata.apk
-
-      - name: Verify NPatch signature and prepare final APK
+      - name: Verify final APK
         env:
-          BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOLS_VERSION }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           set -euo pipefail
-          mkdir -p build/final
-          # NPatch signs directly with our release keystore via -k, so the
-          # output already has the correct signature. Just copy and verify.
-          cp build/racingdaily-npatched-raw.apk build/final/racingdaily-npatched.apk
-          "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose build/final/racingdaily-npatched.apk
-
-      - name: Verify final metadata
-        env:
-          BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOLS_VERSION }}
-        run: |
+          APK="build/final/racingdaily-npatched.apk"
           AAPT2="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/aapt2"
+          APKSIGNER="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/apksigner"
+          ZIPALIGN="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/zipalign"
 
-          read_meta() {
-            local badging
-            badging="$("${AAPT2}" dump badging "$1")"
-            local package_meta min_sdk target_sdk
-            package_meta="$(printf "%s\n" "${badging}" | sed -n "s/^package: name='\([^']*\)' versionCode='\([^']*\)' versionName='\([^']*\)'.*/package=\1 versionCode=\2 versionName=\3/p")"
-            min_sdk="$(printf "%s\n" "${badging}" | sed -n "s/^sdkVersion:'\([^']*\)'.*/minSdk=\1/p")"
-            target_sdk="$(printf "%s\n" "${badging}" | sed -n "s/^targetSdkVersion:'\([^']*\)'.*/targetSdk=\1/p")"
-            printf "%s\n%s\n%s\n" "${package_meta}" "${min_sdk}" "${target_sdk}"
-          }
-
-          read_meta "${ORIGINAL_APK}" > build/original-final.meta
-          if read_meta build/final/racingdaily-npatched.apk > build/patched-final.meta 2>/dev/null; then
-            if cmp -s build/original-final.meta build/patched-final.meta; then
-              echo "Final metadata verification passed"
-            else
-              echo "Warning: final APK metadata differs from original"
-            fi
+          test -s "${APK}"
+          if "${ZIPALIGN}" -c -P 16 -v 4 "${APK}" > build/final/zipalign-16k.txt 2>&1; then
+            echo "Final APK is 16 KB ZIP-aligned"
           else
-            echo "Warning: aapt2 cannot read final APK metadata, skipping comparison"
+            echo "Final APK uses Android 16's 4 KB page-size compatibility mode"
+            "${ZIPALIGN}" -c -P 4 -v 4 "${APK}" > build/final/zipalign-4k.txt 2>&1
+            tail -n 1 build/final/zipalign-4k.txt
           fi
+          "${APKSIGNER}" verify --verbose --print-certs "${APK}" | tee build/final/signature.txt
+
+          expected_cert="$(sha256sum build/signing/release-cert.der | cut -d' ' -f1)"
+          actual_cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' build/final/signature.txt | head -n 1 | tr '[:upper:]' '[:lower:]')"
+          test -n "${actual_cert}"
+          test "${expected_cert}" = "${actual_cert}"
+
+          "${AAPT2}" dump badging "${APK}" > build/final/patched.badging
+          read_meta() {
+            sed -n -e "s/^package: name='\([^']*\)' versionCode='\([^']*\)' versionName='\([^']*\)'.*/package=\1 versionCode=\2 versionName=\3/p" \
+              -e "s/^sdkVersion:'\([^']*\)'.*/minSdk=\1/p" \
+              -e "s/^targetSdkVersion:'\([^']*\)'.*/targetSdk=\1/p" "$1"
+          }
+          read_meta build/original.badging > build/final/original.meta
+          read_meta build/final/patched.badging > build/final/patched.meta
+          cat build/final/original.meta
+          diff --strip-trailing-cr build/final/original.meta build/final/patched.meta
+
+      - name: Prepare artifact names
+        id: artifacts
+        run: |
+          set -euo pipefail
+          version_name="$(sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" build/original.badging)"
+          module_version="$("${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/aapt2" dump badging build/module/xposed-module-signed.apk \
+            | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p")"
+          build_time="$(date -u +%Y%m%d-%H%M%SZ)"
+          integrated_name="racingdaily-${version_name}-npatch-${NPATCH_VERSION}-${build_time}.apk"
+          module_name="fxxkad-dailyracing-${module_version}-${build_time}.apk"
+          cp build/final/racingdaily-npatched.apk "build/final/${integrated_name}"
+          cp build/module/xposed-module-signed.apk "build/module/${module_name}"
+          echo "integrated_name=${integrated_name}" >> "${GITHUB_OUTPUT}"
+          echo "module_name=${module_name}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload integrated APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: racingdaily-npatched-integrated
-          path: build/final/racingdaily-npatched.apk
-
-      - name: Prepare Xposed module artifact
-        env:
-          BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOLS_VERSION }}
-        run: |
-          AAPT2="${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}/aapt2"
-          VERSION_NAME="$("${AAPT2}" dump badging build/module/xposed-module-signed.apk \
-            | sed -n "s/^.*versionName='\([^']*\)'.*/\1/p")"
-          BUILD_TIME="$(date +%Y%m%d-%H%M%S)"
-          MODULE_FILE="fxxkad-dailyracing-${VERSION_NAME}-${BUILD_TIME}.apk"
-          cp build/module/xposed-module-signed.apk "build/${MODULE_FILE}"
+          name: ${{ steps.artifacts.outputs.integrated_name }}
+          path: build/final/${{ steps.artifacts.outputs.integrated_name }}
+          if-no-files-found: error
 
       - name: Upload Xposed module
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: fxxkad-dailyracing-xposed-module
-          path: build/fxxkad-dailyracing-*.apk
+          name: ${{ steps.artifacts.outputs.module_name }}
+          path: build/module/${{ steps.artifacts.outputs.module_name }}
+          if-no-files-found: error
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          if [[ -d build/signing ]]; then
+            find build/signing -type f -delete
+          fi

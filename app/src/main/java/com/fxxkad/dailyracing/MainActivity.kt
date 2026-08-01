@@ -1,6 +1,7 @@
 package com.fxxkad.dailyracing
 
 import android.app.Application
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
@@ -34,9 +35,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicLong
 
 data class BlockRecord(
     val id: Long,
@@ -62,6 +66,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _latestVersion = MutableStateFlow<String?>(null)
     val latestVersion = _latestVersion.asStateFlow()
 
+    private val settingWriteMutex = Mutex()
+    private val settingRevision = AtomicLong()
     private val DISPLAY_DEDUP_WINDOW_MS = 60_000L
 
     init {
@@ -70,49 +76,79 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun fetchSettings() {
+        val revision = settingRevision.get()
         viewModelScope.launch(Dispatchers.IO) {
-            val contentResolver = getApplication<Application>().contentResolver
-            val uri = BlockRecordProvider.CONTENT_URI
-            val bundle = contentResolver.call(uri, "get_setting", "fix_share", null)
-            _fixShareEnabled.value = bundle?.getBoolean("value", true) ?: true
+            val enabled = runCatching {
+                getApplication<Application>().contentResolver.call(
+                    BlockRecordProvider.CONTENT_URI,
+                    BlockRecordProvider.METHOD_GET_SETTING,
+                    BlockRecordProvider.SETTING_FIX_SHARE,
+                    null
+                )?.getBoolean("value", true) ?: true
+            }.getOrDefault(true)
+            if (settingRevision.get() == revision) {
+                _fixShareEnabled.value = enabled
+            }
         }
     }
 
     fun toggleFixShare(enabled: Boolean) {
+        val previous = _fixShareEnabled.value
+        val revision = settingRevision.incrementAndGet()
         _fixShareEnabled.value = enabled
         viewModelScope.launch(Dispatchers.IO) {
-            val contentResolver = getApplication<Application>().contentResolver
-            val uri = BlockRecordProvider.CONTENT_URI
-            val extras = Bundle().apply { putBoolean("value", enabled) }
-            contentResolver.call(uri, "set_setting", "fix_share", extras)
+            settingWriteMutex.withLock {
+                if (settingRevision.get() != revision) return@withLock
+                val persisted = runCatching {
+                    val extras = Bundle().apply { putBoolean("value", enabled) }
+                    getApplication<Application>().contentResolver.call(
+                        BlockRecordProvider.CONTENT_URI,
+                        BlockRecordProvider.METHOD_SET_SETTING,
+                        BlockRecordProvider.SETTING_FIX_SHARE,
+                        extras
+                    )?.getBoolean("success", false) == true
+                }.getOrDefault(false)
+                if (!persisted && settingRevision.get() == revision) {
+                    _fixShareEnabled.value = previous
+                }
+            }
         }
     }
 
     fun refreshRecords() {
         viewModelScope.launch(Dispatchers.IO) {
-            val contentResolver = getApplication<Application>().contentResolver
-            val uri = BlockRecordProvider.CONTENT_URI.buildUpon()
-                .appendQueryParameter("limit", "500")
-                .build()
-
-            // Query total count via call()
-            val statsBundle = contentResolver.call(BlockRecordProvider.CONTENT_URI, "get_stats", null, null)
-            val count = statsBundle?.getLong("total_count", 0L) ?: 0L
-            val ruleCount = statsBundle?.getInt("rule_count", 0) ?: 0
-
-            val cursor = contentResolver.query(uri, null, null, null, null)
-            val newRecords = cursor.useRecords().deduplicateForDisplay()
-
-            _totalCount.value = maxOf(count, newRecords.size.toLong())
-            _ruleCount.value = ruleCount
-            _records.value = newRecords
+            runCatching {
+                val contentResolver = getApplication<Application>().contentResolver
+                val uri = BlockRecordProvider.CONTENT_URI.buildUpon()
+                    .appendQueryParameter("limit", "500")
+                    .build()
+                val statsBundle = contentResolver.call(
+                    BlockRecordProvider.CONTENT_URI,
+                    BlockRecordProvider.METHOD_GET_STATS,
+                    null,
+                    null
+                )
+                val count = statsBundle?.getLong("total_count", 0L) ?: 0L
+                val rules = statsBundle?.getInt("rule_count", 0) ?: 0
+                val records = contentResolver.query(uri, null, null, null, null)
+                    .useRecords()
+                    .deduplicateForDisplay()
+                Triple(count, rules, records)
+            }.onSuccess { (count, rules, records) ->
+                _totalCount.value = maxOf(count, records.size.toLong())
+                _ruleCount.value = rules
+                _records.value = records
+            }
         }
     }
 
     fun clearRecords() {
         viewModelScope.launch(Dispatchers.IO) {
-            getApplication<Application>().contentResolver.delete(BlockRecordProvider.CONTENT_URI, null, null)
-            refreshRecords()
+            runCatching {
+                getApplication<Application>().contentResolver.delete(BlockRecordProvider.CONTENT_URI, null, null)
+            }.onSuccess {
+                refreshRecords()
+            }
         }
     }
 
@@ -124,11 +160,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val url = URL("https://api.github.com/repos/kemi-20/fxxkad_dailyracing/releases/latest")
                 val conn = url.openConnection() as HttpURLConnection
-                conn.setRequestProperty("Accept", "application/vnd.github+json")
-                conn.connectTimeout = 8_000
-                conn.readTimeout = 8_000
-                val json = conn.inputStream.bufferedReader().readText()
-                conn.disconnect()
+                val json = try {
+                    conn.setRequestProperty("Accept", "application/vnd.github+json")
+                    conn.setRequestProperty("User-Agent", "fxxkad-dailyracing")
+                    conn.connectTimeout = 8_000
+                    conn.readTimeout = 8_000
+                    check(conn.responseCode in 200..299) { "GitHub returned HTTP ${conn.responseCode}" }
+                    conn.inputStream.bufferedReader().use { it.readText() }
+                } finally {
+                    conn.disconnect()
+                }
                 val tag = JSONObject(json).getString("tag_name")
                 _latestVersion.value = tag
             } catch (_: Exception) {
@@ -163,12 +204,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun List<BlockRecord>.deduplicateForDisplay(): List<BlockRecord> {
         val kept = mutableListOf<BlockRecord>()
+        val lastKeptTimeByHost = mutableMapOf<String, Long>()
         for (record in sortedBy { it.time }) {
-            val hasRecentSameHost = kept.any {
-                it.host == record.host && record.time - it.time in 0 until DISPLAY_DEDUP_WINDOW_MS
-            }
+            val previousTime = lastKeptTimeByHost[record.host]
+            val hasRecentSameHost = previousTime != null &&
+                record.time - previousTime in 0 until DISPLAY_DEDUP_WINDOW_MS
             if (!hasRecentSameHost) {
                 kept.add(record)
+                lastKeptTimeByHost[record.host] = record.time
             }
         }
         return kept.sortedByDescending { it.time }
@@ -340,9 +383,9 @@ fun ActionsCard(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
-            val time = remember { mutableStateOf(System.currentTimeMillis()) }
+            val time = remember { mutableLongStateOf(System.currentTimeMillis()) }
             Text(
-                text = "运行状态：等待目标应用触发 DNS 查询。列表已合并 1 分钟内重复域名。最近刷新：${DateFormat.format("HH:mm:ss", time.value)}",
+                text = "运行状态：等待目标应用触发 DNS 查询。列表已合并 1 分钟内重复域名。最近刷新：${DateFormat.format("HH:mm:ss", time.longValue)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -351,7 +394,7 @@ fun ActionsCard(
                 FilledTonalButton(
                     onClick = {
                         onRefresh()
-                        time.value = System.currentTimeMillis()
+                        time.longValue = System.currentTimeMillis()
                     },
                     modifier = Modifier.weight(1f)
                 ) {
@@ -448,9 +491,13 @@ fun VersionMenu(latestVersion: String?, onFetchVersion: () -> Unit) {
                 text = { Text("GitHub 发布页") },
                 onClick = {
                     expanded = false
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(
-                        "https://github.com/kemi-20/fxxkad_dailyracing/releases"
-                    )))
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(
+                            "https://github.com/kemi-20/fxxkad_dailyracing/releases"
+                        )))
+                    } catch (_: ActivityNotFoundException) {
+                        Toast.makeText(context, "未找到可打开链接的应用", Toast.LENGTH_SHORT).show()
+                    }
                 }
             )
         }
